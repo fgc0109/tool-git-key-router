@@ -1,3 +1,4 @@
+using GitKeyRouter.Core.Abstractions;
 using GitKeyRouter.Core.Models;
 using GitKeyRouter.Core.Services;
 using GitKeyRouter.Infrastructure.FileSystem;
@@ -70,12 +71,7 @@ public sealed class GitProfileServiceTests
                 ]
             }
         };
-        var runner = new StubProcessRunner(request => new ProcessResult
-        {
-            ExecutablePath = request.ExecutablePath,
-            Arguments = request.Arguments,
-            ExitCode = request.Arguments.Contains("--get-all") ? 1 : 0
-        });
+        var runner = new GitProfileProcessRunner();
         var service = CreateService(store, paths, runner);
         var preview = await service.BuildPreviewAsync();
 
@@ -85,6 +81,53 @@ public sealed class GitProfileServiceTests
         Assert.True(File.Exists(service.MasterConfigPath));
         Assert.Single(Directory.GetFiles(service.ProfilesDirectory, "profile-*.gitconfig"));
         Assert.Contains(runner.Requests, request => request.Arguments.SequenceEqual(["config", "--global", "--add", "include.path", service.MasterConfigPath.Replace('\\', '/')]));
+        Assert.Equal([service.MasterConfigPath.Replace('\\', '/')], runner.IncludePaths);
+    }
+
+    [Fact]
+    public async Task Apply_RestoresFilesAndGlobalIncludesWhenRegistrationFails()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var profile = Profile();
+        var store = new InMemoryAppConfigStore
+        {
+            Config = new AppConfig
+            {
+                GitProfiles = [profile],
+                GitProfileRules =
+                [
+                    new GitProfileRule
+                    {
+                        ProfileId = profile.Id,
+                        Kind = GitProfileRuleKind.Directory,
+                        Pattern = Path.Combine(temp.Path, "work")
+                    }
+                ]
+            }
+        };
+        var runner = new GitProfileProcessRunner
+        {
+            FailNextProfileRegistration = true
+        };
+        runner.IncludePaths.Add("C:/Users/test/existing.gitconfig");
+        var service = CreateService(store, paths, runner);
+        Directory.CreateDirectory(service.ProfilesDirectory);
+        await File.WriteAllTextAsync(service.MasterConfigPath, "old master");
+        var profilePath = Path.Combine(service.ProfilesDirectory, $"profile-{profile.Id}.gitconfig");
+        await File.WriteAllTextAsync(profilePath, "old profile");
+        var obsoletePath = Path.Combine(service.ProfilesDirectory, "profile-obsolete.gitconfig");
+        await File.WriteAllTextAsync(obsoletePath, "obsolete profile");
+        var preview = await service.BuildPreviewAsync();
+
+        var result = await service.ApplyAsync(preview);
+
+        Assert.False(result.Success);
+        Assert.Contains("restored automatically", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("old master", await File.ReadAllTextAsync(service.MasterConfigPath));
+        Assert.Equal("old profile", await File.ReadAllTextAsync(profilePath));
+        Assert.Equal("obsolete profile", await File.ReadAllTextAsync(obsoletePath));
+        Assert.Equal(["C:/Users/test/existing.gitconfig"], runner.IncludePaths);
     }
 
     [Fact]
@@ -113,18 +156,13 @@ public sealed class GitProfileServiceTests
     private static GitProfileService CreateService(
         InMemoryAppConfigStore store,
         TestAppPaths paths,
-        StubProcessRunner? runner = null)
+        IProcessRunner? runner = null)
         => new(
             store,
             new NoOpBackupService(),
             new PhysicalFileSystem(),
             paths,
-            runner ?? new StubProcessRunner(request => new ProcessResult
-            {
-                ExecutablePath = request.ExecutablePath,
-                Arguments = request.Arguments,
-                ExitCode = 0
-            }),
+            runner ?? new GitProfileProcessRunner(),
             new FixedToolchainService("git.exe"));
 
     private static GitProfile Profile(string id = "work", string name = "Work")
@@ -137,4 +175,79 @@ public sealed class GitProfileServiceTests
             SigningKey = "ABC123",
             EnableCommitSigning = true
         };
+
+    private sealed class GitProfileProcessRunner : IProcessRunner
+    {
+        public List<string> IncludePaths { get; } = [];
+
+        public List<ProcessRequest> Requests { get; } = [];
+
+        public bool FailNextProfileRegistration { get; init; }
+
+        private bool _registrationFailed;
+
+        public Task<ProcessResult> RunAsync(
+            ProcessRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            var arguments = request.Arguments;
+            if (arguments.SequenceEqual(["config", "--global", "--get-all", "include.path"]))
+            {
+                return Task.FromResult(Result(
+                    request,
+                    IncludePaths.Count == 0 ? 1 : 0,
+                    string.Join(Environment.NewLine, IncludePaths)));
+            }
+
+            if (arguments.SequenceEqual(["config", "--global", "--unset-all", "include.path"]))
+            {
+                var exitCode = IncludePaths.Count == 0 ? 1 : 0;
+                IncludePaths.Clear();
+                return Task.FromResult(Result(request, exitCode));
+            }
+
+            if (arguments.Count >= 5
+                && arguments[0] == "config"
+                && arguments[1] == "--global"
+                && arguments[2] == "--add"
+                && arguments[3] == "include.path")
+            {
+                var value = arguments[4];
+                if (FailNextProfileRegistration
+                    && !_registrationFailed
+                    && value.EndsWith("/profiles.gitconfig", StringComparison.OrdinalIgnoreCase))
+                {
+                    _registrationFailed = true;
+                    return Task.FromResult(Result(request, 1, error: "Simulated registration failure."));
+                }
+
+                IncludePaths.Add(value);
+                return Task.FromResult(Result(request, 0));
+            }
+
+            if (arguments.Count >= 4
+                && arguments[0] == "config"
+                && arguments[1] == "--file")
+            {
+                return Task.FromResult(Result(request, 0));
+            }
+
+            return Task.FromResult(Result(request, 0));
+        }
+
+        private static ProcessResult Result(
+            ProcessRequest request,
+            int exitCode,
+            string output = "",
+            string error = "")
+            => new()
+            {
+                ExecutablePath = request.ExecutablePath,
+                Arguments = request.Arguments,
+                ExitCode = exitCode,
+                StandardOutput = output,
+                StandardError = error
+            };
+    }
 }

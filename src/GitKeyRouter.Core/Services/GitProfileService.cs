@@ -168,59 +168,351 @@ public sealed class GitProfileService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(preview);
-        await _backupService.CreateSnapshotAsync("Apply Git Profile conditional config", cancellationToken).ConfigureAwait(false);
-        _fileSystem.CreateDirectory(ProfilesDirectory);
-        await _fileSystem.WriteAllTextAtomicAsync(MasterConfigPath, preview.MasterConfigText, cancellationToken).ConfigureAwait(false);
-        foreach (var (path, text) in preview.ProfileFiles)
-        {
-            await _fileSystem.WriteAllTextAtomicAsync(path, text, cancellationToken).ConfigureAwait(false);
-        }
-
-        var expectedPaths = preview.ProfileFiles.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var path in _fileSystem.EnumerateFiles(ProfilesDirectory, "profile-*.gitconfig"))
-        {
-            if (!expectedPaths.Contains(path))
-            {
-                _fileSystem.DeleteFile(path);
-            }
-        }
 
         var tools = await _toolchainService.InspectAsync(cancellationToken).ConfigureAwait(false);
         if (!tools.Git.Exists || string.IsNullOrWhiteSpace(tools.Git.SelectedPath))
         {
-            return OperationResult<GitProfileApplyResult>.Fail("git.exe was not found; profile files were generated but the global include was not registered.");
+            return OperationResult<GitProfileApplyResult>.Fail(
+                "git.exe was not found. No Git Profile files were changed.");
         }
 
-        var includePath = ToGitPath(MasterConfigPath);
-        var getResult = await _processRunner.RunAsync(new ProcessRequest
+        var gitPath = tools.Git.SelectedPath;
+        var includeRead = await ReadGlobalIncludesAsync(gitPath, cancellationToken).ConfigureAwait(false);
+        if (!includeRead.Success || includeRead.Value is null)
         {
-            ExecutablePath = tools.Git.SelectedPath,
+            return OperationResult<GitProfileApplyResult>.Fail(
+                includeRead.Message,
+                includeRead.Errors.ToArray());
+        }
+
+        var originalIncludes = includeRead.Value;
+        var snapshot = await CaptureSnapshotAsync(preview, originalIncludes, cancellationToken).ConfigureAwait(false);
+        var stagingDirectory = Path.Combine(ProfilesDirectory, $".pending-{Guid.NewGuid():N}");
+        var stagedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var mutationStarted = false;
+        ProcessResult? registration = null;
+
+        try
+        {
+            await _backupService.CreateSnapshotAsync(
+                "Apply Git Profile conditional config",
+                cancellationToken).ConfigureAwait(false);
+
+            _fileSystem.CreateDirectory(stagingDirectory);
+            stagedFiles[MasterConfigPath] = Path.Combine(stagingDirectory, MasterFileName);
+            foreach (var path in preview.ProfileFiles.Keys)
+            {
+                stagedFiles[path] = Path.Combine(stagingDirectory, Path.GetFileName(path));
+            }
+
+            await StageAndValidateAsync(
+                gitPath,
+                stagedFiles[MasterConfigPath],
+                preview.MasterConfigText,
+                cancellationToken).ConfigureAwait(false);
+            foreach (var (path, text) in preview.ProfileFiles)
+            {
+                await StageAndValidateAsync(
+                    gitPath,
+                    stagedFiles[path],
+                    text,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            mutationStarted = true;
+            _fileSystem.CreateDirectory(ProfilesDirectory);
+            await _fileSystem.WriteAllTextAtomicAsync(
+                MasterConfigPath,
+                preview.MasterConfigText,
+                cancellationToken).ConfigureAwait(false);
+            foreach (var (path, text) in preview.ProfileFiles)
+            {
+                await _fileSystem.WriteAllTextAtomicAsync(path, text, cancellationToken).ConfigureAwait(false);
+            }
+
+            var expectedPaths = preview.ProfileFiles.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in _fileSystem.EnumerateFiles(ProfilesDirectory, "profile-*.gitconfig"))
+            {
+                if (!expectedPaths.Contains(path))
+                {
+                    _fileSystem.DeleteFile(path);
+                }
+            }
+
+            var includePath = ToGitPath(MasterConfigPath);
+            var registered = originalIncludes.Any(item =>
+                string.Equals(
+                    NormalizeGitPath(item),
+                    NormalizeGitPath(includePath),
+                    StringComparison.OrdinalIgnoreCase));
+            if (!registered)
+            {
+                registration = await _processRunner.RunAsync(new ProcessRequest
+                {
+                    ExecutablePath = gitPath,
+                    Arguments = ["config", "--global", "--add", "include.path", includePath]
+                }, cancellationToken).ConfigureAwait(false);
+                if (!registration.Succeeded)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to register the Git Profile include file. {DescribeProcessFailure(registration)}");
+                }
+            }
+
+            var expectedIncludes = originalIncludes.ToList();
+            if (!registered)
+            {
+                expectedIncludes.Add(includePath);
+            }
+
+            await VerifyAppliedStateAsync(preview, gitPath, expectedIncludes, cancellationToken).ConfigureAwait(false);
+
+            return OperationResult<GitProfileApplyResult>.Ok(new GitProfileApplyResult
+            {
+                MasterConfigPath = MasterConfigPath,
+                ProfileFileCount = preview.ProfileFiles.Count,
+                IncludeRegistrationResult = registration
+            }, "Git Profile conditional config applied transactionally.");
+        }
+        catch (Exception exception)
+        {
+            if (!mutationStarted)
+            {
+                return OperationResult<GitProfileApplyResult>.Fail(
+                    "Git Profile files were not changed because preparation failed.",
+                    exception.Message);
+            }
+
+            var rollbackErrors = await RollbackAsync(snapshot, gitPath).ConfigureAwait(false);
+            if (rollbackErrors.Count == 0)
+            {
+                return OperationResult<GitProfileApplyResult>.Fail(
+                    "Git Profile application failed. The original files and global include.path values were restored automatically.",
+                    exception.Message);
+            }
+
+            return OperationResult<GitProfileApplyResult>.Fail(
+                "Git Profile application failed, and the automatic rollback also failed.",
+                [exception.Message, .. rollbackErrors]);
+        }
+        finally
+        {
+            try
+            {
+                _fileSystem.DeleteDirectory(stagingDirectory, true);
+            }
+            catch
+            {
+                // A stale staging directory is non-authoritative and must not mask the transaction result.
+            }
+        }
+    }
+
+    private async Task<OperationResult<IReadOnlyList<string>>> ReadGlobalIncludesAsync(
+        string gitPath,
+        CancellationToken cancellationToken)
+    {
+        var result = await _processRunner.RunAsync(new ProcessRequest
+        {
+            ExecutablePath = gitPath,
             Arguments = ["config", "--global", "--get-all", "include.path"]
         }, cancellationToken).ConfigureAwait(false);
-        var registered = getResult.StandardOutput
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(item => string.Equals(NormalizeGitPath(item), NormalizeGitPath(includePath), StringComparison.OrdinalIgnoreCase));
-        ProcessResult? registration = null;
-        if (!registered)
+        if (!result.Succeeded && result.ExitCode != 1)
         {
-            registration = await _processRunner.RunAsync(new ProcessRequest
+            return OperationResult<IReadOnlyList<string>>.Fail(
+                "Unable to read the global Git include.path configuration. No Git Profile files were changed.",
+                DescribeProcessFailure(result));
+        }
+
+        return OperationResult<IReadOnlyList<string>>.Ok(ParseLines(result.StandardOutput));
+    }
+
+    private async Task<GitProfileSnapshot> CaptureSnapshotAsync(
+        GitProfileConfigPreview preview,
+        IReadOnlyList<string> includePaths,
+        CancellationToken cancellationToken)
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            MasterConfigPath
+        };
+        paths.UnionWith(preview.ProfileFiles.Keys);
+        paths.UnionWith(_fileSystem.EnumerateFiles(ProfilesDirectory, "profile-*.gitconfig"));
+
+        var files = new Dictionary<string, GitProfileFileSnapshot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in paths)
+        {
+            var exists = _fileSystem.FileExists(path);
+            files[path] = new GitProfileFileSnapshot(
+                exists,
+                exists
+                    ? await _fileSystem.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false)
+                    : null);
+        }
+
+        return new GitProfileSnapshot(files, includePaths.ToList());
+    }
+
+    private async Task StageAndValidateAsync(
+        string gitPath,
+        string stagingPath,
+        string content,
+        CancellationToken cancellationToken)
+    {
+        await _fileSystem.WriteAllTextAtomicAsync(stagingPath, content, cancellationToken).ConfigureAwait(false);
+        var staged = await _fileSystem.ReadAllTextAsync(stagingPath, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(staged, content, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Staged Git Profile file verification failed: {Path.GetFileName(stagingPath)}");
+        }
+
+        var validation = await _processRunner.RunAsync(new ProcessRequest
+        {
+            ExecutablePath = gitPath,
+            Arguments = ["config", "--file", ToGitPath(stagingPath), "--list"]
+        }, cancellationToken).ConfigureAwait(false);
+        if (!validation.Succeeded)
+        {
+            throw new InvalidOperationException(
+                $"Generated Git Profile file is invalid: {Path.GetFileName(stagingPath)}. {DescribeProcessFailure(validation)}");
+        }
+    }
+
+    private async Task VerifyAppliedStateAsync(
+        GitProfileConfigPreview preview,
+        string gitPath,
+        IReadOnlyList<string> expectedIncludes,
+        CancellationToken cancellationToken)
+    {
+        await VerifyFileAsync(MasterConfigPath, preview.MasterConfigText, cancellationToken).ConfigureAwait(false);
+        foreach (var (path, text) in preview.ProfileFiles)
+        {
+            await VerifyFileAsync(path, text, cancellationToken).ConfigureAwait(false);
+        }
+
+        var expectedPaths = preview.ProfileFiles.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var actualPaths = _fileSystem.EnumerateFiles(ProfilesDirectory, "profile-*.gitconfig")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!actualPaths.SetEquals(expectedPaths))
+        {
+            throw new InvalidOperationException("Git Profile file-set verification failed after applying the transaction.");
+        }
+
+        var includeRead = await ReadGlobalIncludesAsync(gitPath, cancellationToken).ConfigureAwait(false);
+        if (!includeRead.Success || includeRead.Value is null
+            || !NormalizedPathsEqual(includeRead.Value, expectedIncludes))
+        {
+            throw new InvalidOperationException(
+                "Global Git include.path verification failed after applying the transaction.");
+        }
+    }
+
+    private async Task VerifyFileAsync(string path, string expected, CancellationToken cancellationToken)
+    {
+        if (!_fileSystem.FileExists(path))
+        {
+            throw new InvalidOperationException($"Expected Git Profile file was not created: {path}");
+        }
+
+        var actual = await _fileSystem.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(actual, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Git Profile file verification failed: {path}");
+        }
+    }
+
+    private async Task<List<string>> RollbackAsync(GitProfileSnapshot snapshot, string gitPath)
+    {
+        var errors = new List<string>();
+        foreach (var (path, file) in snapshot.Files)
+        {
+            try
             {
-                ExecutablePath = tools.Git.SelectedPath,
-                Arguments = ["config", "--global", "--add", "include.path", includePath]
-            }, cancellationToken).ConfigureAwait(false);
-            if (!registration.Succeeded)
+                if (file.Exists)
+                {
+                    await _fileSystem.WriteAllTextAtomicAsync(
+                        path,
+                        file.Content ?? string.Empty,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    _fileSystem.DeleteFile(path);
+                }
+            }
+            catch (Exception exception)
             {
-                return OperationResult<GitProfileApplyResult>.Fail("Failed to register the Git Profile include file.", registration.StandardError);
+                errors.Add($"File rollback failed for '{path}': {exception.Message}");
             }
         }
 
-        return OperationResult<GitProfileApplyResult>.Ok(new GitProfileApplyResult
+        try
         {
-            MasterConfigPath = MasterConfigPath,
-            ProfileFileCount = preview.ProfileFiles.Count,
-            IncludeRegistrationResult = registration
-        }, "Git Profile conditional config applied.");
+            var unset = await _processRunner.RunAsync(new ProcessRequest
+            {
+                ExecutablePath = gitPath,
+                Arguments = ["config", "--global", "--unset-all", "include.path"]
+            }, CancellationToken.None).ConfigureAwait(false);
+            if (!unset.Succeeded && unset.ExitCode is not (1 or 5))
+            {
+                errors.Add($"include.path rollback reset failed: {DescribeProcessFailure(unset)}");
+            }
+
+            foreach (var includePath in snapshot.IncludePaths)
+            {
+                var add = await _processRunner.RunAsync(new ProcessRequest
+                {
+                    ExecutablePath = gitPath,
+                    Arguments = ["config", "--global", "--add", "include.path", includePath]
+                }, CancellationToken.None).ConfigureAwait(false);
+                if (!add.Succeeded)
+                {
+                    errors.Add($"include.path rollback add failed for '{includePath}': {DescribeProcessFailure(add)}");
+                }
+            }
+
+            var restored = await ReadGlobalIncludesAsync(gitPath, CancellationToken.None).ConfigureAwait(false);
+            if (!restored.Success || restored.Value is null
+                || !NormalizedPathsEqual(restored.Value, snapshot.IncludePaths))
+            {
+                errors.Add("include.path rollback verification failed.");
+            }
+        }
+        catch (Exception exception)
+        {
+            errors.Add($"include.path rollback failed: {exception.Message}");
+        }
+
+        return errors;
     }
+
+    private static IReadOnlyList<string> ParseLines(string text)
+        => text.Split(
+                ['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+    private static bool NormalizedPathsEqual(
+        IReadOnlyList<string> actual,
+        IReadOnlyList<string> expected)
+        => actual.Select(NormalizeGitPath)
+            .SequenceEqual(expected.Select(NormalizeGitPath), StringComparer.OrdinalIgnoreCase);
+
+    private static string DescribeProcessFailure(ProcessResult result)
+        => !string.IsNullOrWhiteSpace(result.StandardError)
+            ? result.StandardError.Trim()
+            : result.StartException?.Message
+                ?? (result.TimedOut
+                    ? "The Git command timed out."
+                    : result.Cancelled
+                        ? "The Git command was cancelled."
+                        : $"Git exited with code {result.ExitCode?.ToString() ?? "unknown"}.");
+
+    private sealed record GitProfileFileSnapshot(bool Exists, string? Content);
+
+    private sealed record GitProfileSnapshot(
+        IReadOnlyDictionary<string, GitProfileFileSnapshot> Files,
+        IReadOnlyList<string> IncludePaths);
 
     public GitProfile? ResolveProfile(AppConfig config, string? repositoryDirectory, IEnumerable<string>? remoteUrls = null)
     {

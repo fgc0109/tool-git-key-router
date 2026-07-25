@@ -8,6 +8,8 @@ public interface IFileSystem
 
     void CreateDirectory(string path);
 
+    void DeleteDirectory(string path, bool recursive);
+
     Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default);
 
     Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default);

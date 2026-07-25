@@ -11,6 +11,14 @@ public sealed class PhysicalFileSystem : IFileSystem
 
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
 
+    public void DeleteDirectory(string path, bool recursive)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive);
+        }
+    }
+
     public Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default)
         => File.ReadAllTextAsync(path, Encoding.UTF8, cancellationToken);
 
