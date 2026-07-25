@@ -122,13 +122,10 @@ public sealed partial class SshConfigService
             updated = original + separator + blockText;
         }
 
-        return new ChangePreview
-        {
-            Description = $"Update SSH managed block: {identity.HostAlias}",
-            OriginalText = original,
-            UpdatedText = updated,
-            DiffText = TextDiffService.CreateSimpleDiff(original, updated, "ssh_config.before", "ssh_config.after")
-        };
+        return CreatePreview(
+            $"Update SSH managed block: {identity.HostAlias}",
+            original,
+            updated);
     }
 
     public ChangePreview PreviewDelete(string original, string hostAlias)
@@ -145,13 +142,10 @@ public sealed partial class SshConfigService
         }
 
         updated = CollapseExcessBlankLines(updated, DetectNewline(original));
-        return new ChangePreview
-        {
-            Description = $"Delete SSH managed block: {hostAlias}",
-            OriginalText = original,
-            UpdatedText = updated,
-            DiffText = TextDiffService.CreateSimpleDiff(original, updated, "ssh_config.before", "ssh_config.after")
-        };
+        return CreatePreview(
+            $"Delete SSH managed block: {hostAlias}",
+            original,
+            updated);
     }
 
     public ChangePreview PreviewSynchronizeAll(string original, IEnumerable<GitIdentity> identities)
@@ -162,13 +156,10 @@ public sealed partial class SshConfigService
             updated = PreviewUpsert(updated, identity).UpdatedText;
         }
 
-        return new ChangePreview
-        {
-            Description = "Synchronize all GitKeyRouter SSH managed blocks",
-            OriginalText = original,
-            UpdatedText = updated,
-            DiffText = TextDiffService.CreateSimpleDiff(original, updated, "ssh_config.before", "ssh_config.after")
-        };
+        return CreatePreview(
+            "Synchronize all GitKeyRouter SSH managed blocks",
+            original,
+            updated);
     }
 
     public ChangePreview PreviewSynchronizeAll(string original, AppConfig config)
@@ -181,9 +172,19 @@ public sealed partial class SshConfigService
             updated = PreviewUpsert(updated, service, identity).UpdatedText;
         }
 
+        return CreatePreview(
+            "Synchronize all GitKeyRouter SSH managed blocks",
+            original,
+            updated);
+    }
+
+    public ChangePreview CreatePreview(string description, string original, string updated)
+    {
+        var fileExists = _fileSystem.FileExists(_paths.SshConfigPath);
         return new ChangePreview
         {
-            Description = "Synchronize all GitKeyRouter SSH managed blocks",
+            Description = description,
+            OriginalFile = FileContentSnapshot.Create(fileExists, original),
             OriginalText = original,
             UpdatedText = updated,
             DiffText = TextDiffService.CreateSimpleDiff(original, updated, "ssh_config.before", "ssh_config.after")
@@ -195,6 +196,17 @@ public sealed partial class SshConfigService
         if (!preview.HasChanges)
         {
             return OperationResult.Ok("SSH config already matches the requested state.");
+        }
+
+        var fileExists = _fileSystem.FileExists(_paths.SshConfigPath);
+        var currentText = fileExists
+            ? await _fileSystem.ReadAllTextAsync(_paths.SshConfigPath, cancellationToken).ConfigureAwait(false)
+            : string.Empty;
+        if (!preview.OriginalFile.Matches(fileExists, currentText))
+        {
+            return OperationResult.Fail(
+                "文件在预览后已发生变化，请重新生成预览。",
+                $"SSH config conflict: {_paths.SshConfigPath}");
         }
 
         await _backupService.CreateSnapshotAsync(reason, cancellationToken).ConfigureAwait(false);

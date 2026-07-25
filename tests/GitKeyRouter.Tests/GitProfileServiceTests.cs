@@ -131,6 +131,81 @@ public sealed class GitProfileServiceTests
     }
 
     [Fact]
+    public async Task Apply_RejectsProfileFileChangedAfterPreview()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var profile = Profile();
+        var store = new InMemoryAppConfigStore
+        {
+            Config = new AppConfig
+            {
+                GitProfiles = [profile],
+                GitProfileRules =
+                [
+                    new GitProfileRule
+                    {
+                        ProfileId = profile.Id,
+                        Kind = GitProfileRuleKind.Directory,
+                        Pattern = Path.Combine(temp.Path, "work")
+                    }
+                ]
+            }
+        };
+        var runner = new GitProfileProcessRunner();
+        var service = CreateService(store, paths, runner);
+        Directory.CreateDirectory(service.ProfilesDirectory);
+        var profilePath = Path.Combine(service.ProfilesDirectory, $"profile-{profile.Id}.gitconfig");
+        await File.WriteAllTextAsync(profilePath, "old profile");
+        var preview = await service.BuildPreviewAsync();
+        const string externalEdit = "external profile edit";
+        await File.WriteAllTextAsync(profilePath, externalEdit);
+
+        var result = await service.ApplyAsync(preview);
+
+        Assert.False(result.Success);
+        Assert.Contains("预览后", result.Message, StringComparison.Ordinal);
+        Assert.Equal(externalEdit, await File.ReadAllTextAsync(profilePath));
+        Assert.DoesNotContain(runner.Requests, request => request.Arguments.Contains("--add"));
+    }
+
+    [Fact]
+    public async Task Apply_RejectsManagedProfileCreatedAfterPreview()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var profile = Profile();
+        var store = new InMemoryAppConfigStore
+        {
+            Config = new AppConfig
+            {
+                GitProfiles = [profile],
+                GitProfileRules =
+                [
+                    new GitProfileRule
+                    {
+                        ProfileId = profile.Id,
+                        Kind = GitProfileRuleKind.Directory,
+                        Pattern = Path.Combine(temp.Path, "work")
+                    }
+                ]
+            }
+        };
+        var service = CreateService(store, paths);
+        var preview = await service.BuildPreviewAsync();
+        Directory.CreateDirectory(service.ProfilesDirectory);
+        var unexpectedPath = Path.Combine(service.ProfilesDirectory, "profile-external.gitconfig");
+        const string externalContent = "external profile";
+        await File.WriteAllTextAsync(unexpectedPath, externalContent);
+
+        var result = await service.ApplyAsync(preview);
+
+        Assert.False(result.Success);
+        Assert.Contains("预览后", result.Message, StringComparison.Ordinal);
+        Assert.Equal(externalContent, await File.ReadAllTextAsync(unexpectedPath));
+    }
+
+    [Fact]
     public void ResolveProfile_UsesLongestDirectoryRuleThenRemoteRule()
     {
         using var temp = new TemporaryDirectory();

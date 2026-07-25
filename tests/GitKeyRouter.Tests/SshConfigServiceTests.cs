@@ -86,6 +86,61 @@ public sealed class SshConfigServiceTests
         Assert.DoesNotContain("github-camus", aliases);
     }
 
+    [Fact]
+    public async Task Apply_WritesWhenPreviewSnapshotStillMatches()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        Directory.CreateDirectory(paths.SshDirectory);
+        const string original = "Host internal\n    HostName internal.example\n";
+        await File.WriteAllTextAsync(paths.SshConfigPath, original);
+        var service = new SshConfigService(new PhysicalFileSystem(), paths, new NoOpBackupService());
+        var preview = service.PreviewUpsert(original, Identity("github-camus", @"C:\key"));
+
+        var result = await service.ApplyAsync(preview, "test unchanged preview");
+
+        Assert.True(result.Success);
+        Assert.Equal(preview.UpdatedText, await File.ReadAllTextAsync(paths.SshConfigPath));
+    }
+
+    [Fact]
+    public async Task Apply_RejectsExistingFileChangedAfterPreview()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        Directory.CreateDirectory(paths.SshDirectory);
+        const string original = "Host internal\n    HostName internal.example\n";
+        await File.WriteAllTextAsync(paths.SshConfigPath, original);
+        var service = new SshConfigService(new PhysicalFileSystem(), paths, new NoOpBackupService());
+        var preview = service.PreviewUpsert(original, Identity("github-camus", @"C:\key"));
+        const string externalEdit = "# changed by another editor\n";
+        await File.WriteAllTextAsync(paths.SshConfigPath, externalEdit);
+
+        var result = await service.ApplyAsync(preview, "test stale preview");
+
+        Assert.False(result.Success);
+        Assert.Contains("预览后", result.Message, StringComparison.Ordinal);
+        Assert.Equal(externalEdit, await File.ReadAllTextAsync(paths.SshConfigPath));
+    }
+
+    [Fact]
+    public async Task Apply_RejectsFileCreatedAfterPreview()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var service = new SshConfigService(new PhysicalFileSystem(), paths, new NoOpBackupService());
+        var preview = service.PreviewUpsert(string.Empty, Identity("github-camus", @"C:\key"));
+        Directory.CreateDirectory(paths.SshDirectory);
+        const string externalEdit = "# created by another editor\n";
+        await File.WriteAllTextAsync(paths.SshConfigPath, externalEdit);
+
+        var result = await service.ApplyAsync(preview, "test stale preview");
+
+        Assert.False(result.Success);
+        Assert.Contains("预览后", result.Message, StringComparison.Ordinal);
+        Assert.Equal(externalEdit, await File.ReadAllTextAsync(paths.SshConfigPath));
+    }
+
     private static SshConfigService CreateService()
     {
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "GitKeyRouter.Tests", Guid.NewGuid().ToString("N"));

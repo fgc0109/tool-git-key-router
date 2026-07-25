@@ -127,10 +127,28 @@ public sealed class GitProfileService
     {
         var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
         var files = BuildProfileFiles(config);
+        var expectedProfilePaths = files.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var master = BuildMasterConfig(config, files);
-        var existingMaster = _fileSystem.FileExists(MasterConfigPath)
-            ? await _fileSystem.ReadAllTextAsync(MasterConfigPath, cancellationToken).ConfigureAwait(false)
-            : string.Empty;
+        var previewPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            MasterConfigPath
+        };
+        previewPaths.UnionWith(files.Keys);
+        previewPaths.UnionWith(_fileSystem.EnumerateFiles(ProfilesDirectory, "profile-*.gitconfig"));
+
+        var originalTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var originalFiles = new Dictionary<string, FileContentSnapshot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in previewPaths)
+        {
+            var exists = _fileSystem.FileExists(path);
+            var text = exists
+                ? await _fileSystem.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false)
+                : string.Empty;
+            originalTexts[path] = text;
+            originalFiles[path] = FileContentSnapshot.Create(exists, text);
+        }
+
+        var existingMaster = originalTexts[MasterConfigPath];
         var diff = new StringBuilder(TextDiffService.CreateSimpleDiff(
             existingMaster,
             master,
@@ -139,9 +157,7 @@ public sealed class GitProfileService
         var hasChanges = !string.Equals(existingMaster, master, StringComparison.Ordinal);
         foreach (var (path, text) in files)
         {
-            var original = _fileSystem.FileExists(path)
-                ? await _fileSystem.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false)
-                : string.Empty;
+            var original = originalTexts[path];
             if (!string.Equals(original, text, StringComparison.Ordinal))
             {
                 hasChanges = true;
@@ -153,10 +169,23 @@ public sealed class GitProfileService
             }
         }
 
+        foreach (var path in previewPaths.Where(path =>
+                     !string.Equals(path, MasterConfigPath, StringComparison.OrdinalIgnoreCase)
+                     && !expectedProfilePaths.Contains(path)))
+        {
+            hasChanges = true;
+            diff.AppendLine().Append(TextDiffService.CreateSimpleDiff(
+                originalTexts[path],
+                string.Empty,
+                Path.GetFileName(path) + ".before",
+                Path.GetFileName(path) + ".after"));
+        }
+
         return new GitProfileConfigPreview
         {
             MasterConfigPath = MasterConfigPath,
             MasterConfigText = master,
+            OriginalFiles = originalFiles,
             ProfileFiles = files,
             DiffText = diff.ToString(),
             HasChanges = hasChanges
@@ -183,6 +212,12 @@ public sealed class GitProfileService
             return OperationResult<GitProfileApplyResult>.Fail(
                 includeRead.Message,
                 includeRead.Errors.ToArray());
+        }
+
+        var changedPreviewPath = await FindChangedPreviewPathAsync(preview, cancellationToken).ConfigureAwait(false);
+        if (changedPreviewPath is not null)
+        {
+            return StalePreviewFailure(changedPreviewPath);
         }
 
         var originalIncludes = includeRead.Value;
@@ -217,6 +252,12 @@ public sealed class GitProfileService
                     stagedFiles[path],
                     text,
                     cancellationToken).ConfigureAwait(false);
+            }
+
+            changedPreviewPath = await FindChangedPreviewPathAsync(preview, cancellationToken).ConfigureAwait(false);
+            if (changedPreviewPath is not null)
+            {
+                return StalePreviewFailure(changedPreviewPath);
             }
 
             mutationStarted = true;
@@ -326,6 +367,45 @@ public sealed class GitProfileService
 
         return OperationResult<IReadOnlyList<string>>.Ok(ParseLines(result.StandardOutput));
     }
+
+    private async Task<string?> FindChangedPreviewPathAsync(
+        GitProfileConfigPreview preview,
+        CancellationToken cancellationToken)
+    {
+        var currentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            MasterConfigPath
+        };
+        currentPaths.UnionWith(preview.ProfileFiles.Keys);
+        currentPaths.UnionWith(_fileSystem.EnumerateFiles(ProfilesDirectory, "profile-*.gitconfig"));
+
+        var previewPaths = preview.OriginalFiles.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!currentPaths.SetEquals(previewPaths))
+        {
+            return currentPaths.Except(previewPaths, StringComparer.OrdinalIgnoreCase)
+                .Concat(previewPaths.Except(currentPaths, StringComparer.OrdinalIgnoreCase))
+                .FirstOrDefault() ?? ProfilesDirectory;
+        }
+
+        foreach (var path in previewPaths)
+        {
+            var exists = _fileSystem.FileExists(path);
+            var text = exists
+                ? await _fileSystem.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false)
+                : string.Empty;
+            if (!preview.OriginalFiles[path].Matches(exists, text))
+            {
+                return path;
+            }
+        }
+
+        return null;
+    }
+
+    private static OperationResult<GitProfileApplyResult> StalePreviewFailure(string path)
+        => OperationResult<GitProfileApplyResult>.Fail(
+            "文件在预览后已发生变化，请重新生成预览。",
+            $"Git Profile conflict: {path}");
 
     private async Task<GitProfileSnapshot> CaptureSnapshotAsync(
         GitProfileConfigPreview preview,

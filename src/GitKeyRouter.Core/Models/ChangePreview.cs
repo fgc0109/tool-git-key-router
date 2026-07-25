@@ -1,8 +1,27 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace GitKeyRouter.Core.Models;
+
+public sealed record FileContentSnapshot(bool Exists, string Sha256)
+{
+    public static FileContentSnapshot Create(bool exists, string content)
+        => new(exists, ComputeSha256(content));
+
+    public bool Matches(bool exists, string content)
+        => Exists == exists
+            && string.Equals(Sha256, ComputeSha256(content), StringComparison.OrdinalIgnoreCase);
+
+    private static string ComputeSha256(string content)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)))
+            .ToLowerInvariant();
+}
 
 public sealed class ChangePreview
 {
     public required string Description { get; init; }
+
+    public required FileContentSnapshot OriginalFile { get; init; }
 
     public required string OriginalText { get; init; }
 

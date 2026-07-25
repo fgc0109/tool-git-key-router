@@ -46,6 +46,8 @@ public sealed class GitProfileConfigPreview
 
     public required string MasterConfigText { get; init; }
 
+    public required IReadOnlyDictionary<string, FileContentSnapshot> OriginalFiles { get; init; }
+
     public required IReadOnlyDictionary<string, string> ProfileFiles { get; init; }
 
     public required string DiffText { get; init; }

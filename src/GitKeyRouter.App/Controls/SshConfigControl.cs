@@ -185,13 +185,10 @@ public sealed class SshConfigControl : UserControl, IAsyncRefreshable
         }
 
         var updated = editor.ContentTextBox.Text;
-        var preview = new ChangePreview
-        {
-            Description = "Replace SSH config raw text",
-            OriginalText = _raw,
-            UpdatedText = updated,
-            DiffText = TextDiffService.CreateSimpleDiff(_raw, updated, "ssh_config.before", "ssh_config.after")
-        };
+        var preview = _services.SshConfigService.CreatePreview(
+            "Replace SSH config raw text",
+            _raw,
+            updated);
         using var diff = new DiffPreviewForm("SSH Config 完整文件 diff", preview.DiffText, "确认保存完整文件");
         if (diff.ShowDialog(this) != DialogResult.OK)
         {

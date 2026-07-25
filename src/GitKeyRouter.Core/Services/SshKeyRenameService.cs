@@ -229,13 +229,10 @@ public sealed class SshKeyRenameService
                 updatedSsh = _sshConfigService.PreviewUpsert(updatedSsh, identity).UpdatedText;
             }
 
-            var sshPreview = new ChangePreview
-            {
-                Description = $"Update SSH key paths after renaming {currentPlan.IdentityDisplayName}",
-                OriginalText = originalSsh,
-                UpdatedText = updatedSsh,
-                DiffText = TextDiffService.CreateSimpleDiff(originalSsh, updatedSsh, "ssh_config.before", "ssh_config.after")
-            };
+            var sshPreview = _sshConfigService.CreatePreview(
+                $"Update SSH key paths after renaming {currentPlan.IdentityDisplayName}",
+                originalSsh,
+                updatedSsh);
             var sshResult = await _sshConfigService.ApplyAsync(
                 sshPreview,
                 $"Update SSH key paths after renaming: {currentPlan.IdentityDisplayName}",
@@ -293,13 +290,10 @@ public sealed class SshKeyRenameService
                 var currentSsh = await _sshConfigService.ReadRawAsync(CancellationToken.None).ConfigureAwait(false);
                 if (!string.Equals(currentSsh, originalSsh, StringComparison.Ordinal))
                 {
-                    var restorePreview = new ChangePreview
-                    {
-                        Description = "Rollback SSH config after key rename failure",
-                        OriginalText = currentSsh,
-                        UpdatedText = originalSsh,
-                        DiffText = TextDiffService.CreateSimpleDiff(currentSsh, originalSsh, "ssh_config.failed", "ssh_config.restored")
-                    };
+                    var restorePreview = _sshConfigService.CreatePreview(
+                        "Rollback SSH config after key rename failure",
+                        currentSsh,
+                        originalSsh);
                     var restoreResult = await _sshConfigService.ApplyAsync(
                         restorePreview,
                         "Rollback SSH config after key rename failure",

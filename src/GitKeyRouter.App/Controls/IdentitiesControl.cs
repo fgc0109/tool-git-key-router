@@ -514,13 +514,10 @@ public sealed class IdentitiesControl : UserControl, IAsyncRefreshable
         }
 
         updated = _services.SshConfigService.PreviewUpsert(updated, service, identity).UpdatedText;
-        var preview = new ChangePreview
-        {
-            Description = $"Synchronize SSH identity: {identity.HostAlias}",
-            OriginalText = raw,
-            UpdatedText = updated,
-            DiffText = TextDiffService.CreateSimpleDiff(raw, updated, "ssh_config.before", "ssh_config.after")
-        };
+        var preview = _services.SshConfigService.CreatePreview(
+            $"Synchronize SSH identity: {identity.HostAlias}",
+            raw,
+            updated);
         using var diff = new DiffPreviewForm("SSH Config 变更预览", preview.DiffText);
         if (diff.ShowDialog(this) != DialogResult.OK)
         {
