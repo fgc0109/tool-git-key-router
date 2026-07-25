@@ -79,6 +79,10 @@ internal sealed class FakeGitUrlRewriteStore : IGitUrlRewriteStore
 
     public bool FailNextAdd { get; set; }
 
+    public HashSet<int> FailAddAttempts { get; } = [];
+
+    private int _addAttemptCount;
+
     public ProcessResult? RemoteResult { get; set; }
 
     public string? GitExecutablePath => "git.exe";
@@ -97,7 +101,8 @@ internal sealed class FakeGitUrlRewriteStore : IGitUrlRewriteStore
 
     public Task<ProcessResult> AddAsync(GitUrlRewriteRule rule, CancellationToken cancellationToken = default)
     {
-        if (FailNextAdd)
+        _addAttemptCount++;
+        if (FailNextAdd || FailAddAttempts.Contains(_addAttemptCount))
         {
             FailNextAdd = false;
             return Task.FromResult(new ProcessResult
@@ -105,7 +110,7 @@ internal sealed class FakeGitUrlRewriteStore : IGitUrlRewriteStore
                 ExecutablePath = "git.exe",
                 Arguments = ["config", "--add", rule.ConfigKey, rule.InsteadOfUrl],
                 ExitCode = 1,
-                StandardError = "Simulated add failure."
+                StandardError = $"Simulated add failure on attempt {_addAttemptCount}."
             });
         }
 

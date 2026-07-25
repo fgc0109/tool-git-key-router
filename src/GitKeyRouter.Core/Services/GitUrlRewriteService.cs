@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using GitKeyRouter.Core.Abstractions;
 using GitKeyRouter.Core.Models;
 
@@ -5,6 +7,12 @@ namespace GitKeyRouter.Core.Services;
 
 public sealed class GitUrlRewriteService
 {
+    private static readonly JsonSerializerOptions ConfigCloneOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
     private readonly IAppConfigStore _configStore;
     private readonly IGitUrlRewriteStore _store;
     private readonly IBackupService _backupService;
@@ -361,32 +369,47 @@ public sealed class GitUrlRewriteService
             return OperationResult<IReadOnlyList<ProcessResult>>.Ok([], "Git URL rewrite rules already match.");
         }
 
-        var reconciliations = new List<(string Key, IReadOnlyList<string> Desired)>();
-        var keys = plan.Adds.Concat(plan.Removes)
-            .Select(item => item.ConfigKey)
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-        foreach (var key in keys)
+        var reconciliations = new List<RewriteReconciliation>();
+        try
         {
-            var current = await _store.GetValuesAsync(key, cancellationToken).ConfigureAwait(false);
-            var removed = plan.Removes.Where(item => string.Equals(item.ConfigKey, key, StringComparison.OrdinalIgnoreCase))
-                .Select(item => item.InsteadOfUrl)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var desired = current.Where(value => !removed.Contains(value))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            foreach (var value in plan.Adds.Where(item => string.Equals(item.ConfigKey, key, StringComparison.OrdinalIgnoreCase))
-                         .Select(item => item.InsteadOfUrl))
+            var keys = plan.Adds.Concat(plan.Removes)
+                .Select(item => item.ConfigKey)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            foreach (var key in keys)
             {
-                if (!desired.Contains(value, StringComparer.OrdinalIgnoreCase))
+                var current = await _store.GetValuesAsync(key, cancellationToken).ConfigureAwait(false);
+                var removed = plan.Removes
+                    .Where(item => string.Equals(item.ConfigKey, key, StringComparison.OrdinalIgnoreCase))
+                    .Select(item => item.InsteadOfUrl)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var desired = current.Where(value => !removed.Contains(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                foreach (var value in plan.Adds
+                             .Where(item => string.Equals(item.ConfigKey, key, StringComparison.OrdinalIgnoreCase))
+                             .Select(item => item.InsteadOfUrl))
                 {
-                    desired.Add(value);
+                    if (!desired.Contains(value, StringComparer.OrdinalIgnoreCase))
+                    {
+                        desired.Add(value);
+                    }
+                }
+
+                if (!current.SequenceEqual(desired, StringComparer.OrdinalIgnoreCase))
+                {
+                    reconciliations.Add(new RewriteReconciliation(
+                        key,
+                        key[4..^".insteadOf".Length],
+                        current.ToList(),
+                        desired));
                 }
             }
-
-            if (!current.SequenceEqual(desired, StringComparer.OrdinalIgnoreCase))
-            {
-                reconciliations.Add((key, desired));
-            }
+        }
+        catch (Exception exception)
+        {
+            return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                "Failed to capture the affected Git URL rewrite keys. No changes were made.",
+                exception.Message);
         }
 
         if (reconciliations.Count == 0 && plan.RepositoryRouteIdsToRemove.Count == 0)
@@ -394,39 +417,235 @@ public sealed class GitUrlRewriteService
             return OperationResult<IReadOnlyList<ProcessResult>>.Ok([], "Git URL rewrite rules already match.");
         }
 
-        await _backupService.CreateSnapshotAsync(reason, cancellationToken).ConfigureAwait(false);
-        var results = new List<ProcessResult>();
-        foreach (var reconciliation in reconciliations)
-        {
-            var unset = await _store.RemoveAllForKeyAsync(reconciliation.Key, cancellationToken).ConfigureAwait(false);
-            results.Add(unset);
-            if (!unset.Succeeded && unset.ExitCode is not (1 or 5))
-            {
-                return OperationResult<IReadOnlyList<ProcessResult>>.Fail("Failed while resetting a managed Git URL rewrite key.", unset.StandardError);
-            }
-
-            var baseUrl = reconciliation.Key[4..^".insteadOf".Length];
-            foreach (var value in reconciliation.Desired)
-            {
-                var add = await _store.AddAsync(new GitUrlRewriteRule(baseUrl, value), cancellationToken).ConfigureAwait(false);
-                results.Add(add);
-                if (!add.Succeeded)
-                {
-                    return OperationResult<IReadOnlyList<ProcessResult>>.Fail("Failed while adding a Git URL rewrite.", add.StandardError);
-                }
-            }
-        }
-
+        AppConfig? originalConfig = null;
+        AppConfig? updatedConfig = null;
         if (plan.RepositoryRouteIdsToRemove.Count > 0)
         {
-            var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-            config.RepositoryRoutes.RemoveAll(route => plan.RepositoryRouteIdsToRemove.Contains(route.Id, StringComparer.OrdinalIgnoreCase));
-            config.Normalize();
-            await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                originalConfig = CloneConfig(
+                    await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false));
+                updatedConfig = CloneConfig(originalConfig);
+                updatedConfig.RepositoryRoutes.RemoveAll(route =>
+                    plan.RepositoryRouteIdsToRemove.Contains(route.Id, StringComparer.OrdinalIgnoreCase));
+                updatedConfig.Normalize();
+            }
+            catch (Exception exception)
+            {
+                return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                    "Failed to prepare the application configuration for Git URL rewrite reconciliation.",
+                    exception.Message);
+            }
         }
 
-        return OperationResult<IReadOnlyList<ProcessResult>>.Ok(results, "Git URL rewrite rules were reconciled idempotently.");
+        try
+        {
+            await _backupService.CreateSnapshotAsync(reason, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                "Failed to create a safety backup. No Git URL rewrite keys were changed.",
+                exception.Message);
+        }
+
+        var results = new List<ProcessResult>();
+        var gitMutationStarted = false;
+        var configMutationAttempted = false;
+        try
+        {
+            foreach (var reconciliation in reconciliations)
+            {
+                gitMutationStarted = true;
+                var unset = await _store.RemoveAllForKeyAsync(
+                    reconciliation.Key,
+                    cancellationToken).ConfigureAwait(false);
+                results.Add(unset);
+                if (!unset.Succeeded && unset.ExitCode is not (1 or 5))
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to reset '{reconciliation.Key}': {DescribeProcessFailure(unset)}");
+                }
+
+                foreach (var value in reconciliation.Desired)
+                {
+                    var add = await _store.AddAsync(
+                        new GitUrlRewriteRule(reconciliation.BaseUrl, value),
+                        cancellationToken).ConfigureAwait(false);
+                    results.Add(add);
+                    if (!add.Succeeded)
+                    {
+                        throw new InvalidOperationException(
+                            $"Failed to add '{value}' for '{reconciliation.Key}': {DescribeProcessFailure(add)}");
+                    }
+                }
+            }
+
+            var verificationErrors = await VerifyReconciliationsAsync(
+                reconciliations,
+                item => item.Desired,
+                "Apply",
+                cancellationToken).ConfigureAwait(false);
+            if (verificationErrors.Count > 0)
+            {
+                throw new InvalidOperationException(string.Join(" ", verificationErrors));
+            }
+
+            if (updatedConfig is not null)
+            {
+                configMutationAttempted = true;
+                await _configStore.SaveAsync(updatedConfig, cancellationToken).ConfigureAwait(false);
+                var verifiedConfig = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+                if (verifiedConfig.RepositoryRoutes.Any(route =>
+                        plan.RepositoryRouteIdsToRemove.Contains(route.Id, StringComparer.OrdinalIgnoreCase)))
+                {
+                    throw new InvalidOperationException(
+                        "Application configuration verification failed after removing migrated repository routes.");
+                }
+            }
+
+            return OperationResult<IReadOnlyList<ProcessResult>>.Ok(
+                results,
+                "Git URL rewrite rules were reconciled and verified transactionally.");
+        }
+        catch (Exception exception)
+        {
+            var rollbackErrors = new List<string>();
+            if (gitMutationStarted)
+            {
+                rollbackErrors.AddRange(await RestoreReconciliationsAsync(reconciliations).ConfigureAwait(false));
+            }
+
+            if (configMutationAttempted && originalConfig is not null)
+            {
+                try
+                {
+                    await _configStore.SaveAsync(originalConfig, CancellationToken.None).ConfigureAwait(false);
+                    var restoredConfig = await _configStore.LoadAsync(CancellationToken.None).ConfigureAwait(false);
+                    if (!ConfigsEqual(restoredConfig, originalConfig))
+                    {
+                        rollbackErrors.Add("Application configuration rollback verification failed.");
+                    }
+                }
+                catch (Exception rollbackException)
+                {
+                    rollbackErrors.Add($"Application configuration rollback failed: {rollbackException.Message}");
+                }
+            }
+
+            var applyError = $"Apply: {exception.Message}";
+            if (rollbackErrors.Count == 0)
+            {
+                return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                    "Git URL rewrite reconciliation failed. The original affected keys and configuration were restored automatically.",
+                    applyError);
+            }
+
+            return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                "Git URL rewrite reconciliation failed, and the automatic rollback also failed.",
+                [applyError, .. rollbackErrors.Select(error => $"Rollback: {error}")]);
+        }
     }
+
+    private async Task<List<string>> RestoreReconciliationsAsync(
+        IReadOnlyList<RewriteReconciliation> reconciliations)
+    {
+        var errors = new List<string>();
+        foreach (var reconciliation in reconciliations)
+        {
+            try
+            {
+                var unset = await _store.RemoveAllForKeyAsync(
+                    reconciliation.Key,
+                    CancellationToken.None).ConfigureAwait(false);
+                if (!unset.Succeeded && unset.ExitCode is not (1 or 5))
+                {
+                    errors.Add($"Failed to reset '{reconciliation.Key}': {DescribeProcessFailure(unset)}");
+                    continue;
+                }
+
+                foreach (var value in reconciliation.Original)
+                {
+                    var add = await _store.AddAsync(
+                        new GitUrlRewriteRule(reconciliation.BaseUrl, value),
+                        CancellationToken.None).ConfigureAwait(false);
+                    if (!add.Succeeded)
+                    {
+                        errors.Add(
+                            $"Failed to restore '{value}' for '{reconciliation.Key}': {DescribeProcessFailure(add)}");
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                errors.Add($"Failed to restore '{reconciliation.Key}': {exception.Message}");
+            }
+        }
+
+        errors.AddRange(await VerifyReconciliationsAsync(
+            reconciliations,
+            item => item.Original,
+            "Rollback",
+            CancellationToken.None).ConfigureAwait(false));
+        return errors;
+    }
+
+    private async Task<List<string>> VerifyReconciliationsAsync(
+        IReadOnlyList<RewriteReconciliation> reconciliations,
+        Func<RewriteReconciliation, IReadOnlyList<string>> expectedSelector,
+        string phase,
+        CancellationToken cancellationToken)
+    {
+        var errors = new List<string>();
+        foreach (var reconciliation in reconciliations)
+        {
+            try
+            {
+                var actual = await _store.GetValuesAsync(
+                    reconciliation.Key,
+                    cancellationToken).ConfigureAwait(false);
+                var expected = expectedSelector(reconciliation);
+                if (!actual.SequenceEqual(expected, StringComparer.OrdinalIgnoreCase))
+                {
+                    errors.Add($"{phase} verification failed for '{reconciliation.Key}'.");
+                }
+            }
+            catch (Exception exception)
+            {
+                errors.Add($"{phase} verification failed for '{reconciliation.Key}': {exception.Message}");
+            }
+        }
+
+        return errors;
+    }
+
+    private static AppConfig CloneConfig(AppConfig config)
+        => JsonSerializer.Deserialize<AppConfig>(
+            JsonSerializer.Serialize(config, ConfigCloneOptions),
+            ConfigCloneOptions)
+            ?? throw new InvalidOperationException("Failed to clone the application configuration.");
+
+    private static bool ConfigsEqual(AppConfig left, AppConfig right)
+        => string.Equals(
+            JsonSerializer.Serialize(left, ConfigCloneOptions),
+            JsonSerializer.Serialize(right, ConfigCloneOptions),
+            StringComparison.Ordinal);
+
+    private static string DescribeProcessFailure(ProcessResult result)
+        => !string.IsNullOrWhiteSpace(result.StandardError)
+            ? result.StandardError.Trim()
+            : result.StartException?.Message
+                ?? (result.TimedOut
+                    ? "The Git command timed out."
+                    : result.Cancelled
+                        ? "The Git command was cancelled."
+                        : $"Git exited with code {result.ExitCode?.ToString() ?? "unknown"}.");
+
+    private sealed record RewriteReconciliation(
+        string Key,
+        string BaseUrl,
+        IReadOnlyList<string> Original,
+        IReadOnlyList<string> Desired);
 
     public async Task<UrlRewritePreview> PreviewAsync(string originalUrl, CancellationToken cancellationToken = default)
     {

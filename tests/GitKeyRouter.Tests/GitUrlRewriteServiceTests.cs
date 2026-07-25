@@ -54,6 +54,84 @@ public sealed class GitUrlRewriteServiceTests
     }
 
     [Fact]
+    public async Task ApplyPlan_RestoresAllAffectedKeysAfterPartialFailure()
+    {
+        const string baseUrl = "git@managed:";
+        var oldOne = new GitUrlRewriteRule(baseUrl, "https://old-one.example/");
+        var oldTwo = new GitUrlRewriteRule(baseUrl, "https://old-two.example/");
+        var newOne = new GitUrlRewriteRule(baseUrl, "https://new-one.example/");
+        var newTwo = new GitUrlRewriteRule(baseUrl, "https://new-two.example/");
+        var unrelated = new GitUrlRewriteRule("git@unrelated:", "https://unrelated.example/");
+        var git = new FakeGitUrlRewriteStore();
+        git.Rules.AddRange([oldOne, oldTwo, unrelated]);
+        git.FailAddAttempts.Add(2);
+        var backup = new NoOpBackupService();
+        var service = new GitUrlRewriteService(ConfigStore(), git, backup);
+        var plan = new GitRewritePlan();
+        plan.Removes.AddRange([oldOne, oldTwo]);
+        plan.Adds.AddRange([newOne, newTwo]);
+
+        var result = await service.ApplyPlanAsync(plan, "test rollback");
+
+        Assert.False(result.Success);
+        Assert.Contains("restored automatically", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(
+            [oldOne.InsteadOfUrl, oldTwo.InsteadOfUrl],
+            await git.GetValuesAsync(oldOne.ConfigKey));
+        Assert.Contains(unrelated, git.Rules);
+        Assert.Equal(1, backup.SnapshotCount);
+    }
+
+    [Fact]
+    public async Task ApplyPlan_ReportsApplyAndRollbackFailuresSeparately()
+    {
+        const string baseUrl = "git@managed:";
+        var oldOne = new GitUrlRewriteRule(baseUrl, "https://old-one.example/");
+        var oldTwo = new GitUrlRewriteRule(baseUrl, "https://old-two.example/");
+        var newOne = new GitUrlRewriteRule(baseUrl, "https://new-one.example/");
+        var newTwo = new GitUrlRewriteRule(baseUrl, "https://new-two.example/");
+        var git = new FakeGitUrlRewriteStore();
+        git.Rules.AddRange([oldOne, oldTwo]);
+        git.FailAddAttempts.UnionWith([2, 3]);
+        var service = new GitUrlRewriteService(ConfigStore(), git, new NoOpBackupService());
+        var plan = new GitRewritePlan();
+        plan.Removes.AddRange([oldOne, oldTwo]);
+        plan.Adds.AddRange([newOne, newTwo]);
+
+        var result = await service.ApplyPlanAsync(plan, "test rollback failure");
+
+        Assert.False(result.Success);
+        Assert.Contains("rollback also failed", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.Errors, error => error.StartsWith("Apply:", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, error => error.StartsWith("Rollback:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ApplyPlan_VerifiesExactTargetWithoutTouchingUnrelatedKeys()
+    {
+        const string baseUrl = "git@managed:";
+        var oldOne = new GitUrlRewriteRule(baseUrl, "https://old-one.example/");
+        var oldTwo = new GitUrlRewriteRule(baseUrl, "https://old-two.example/");
+        var newOne = new GitUrlRewriteRule(baseUrl, "https://new-one.example/");
+        var newTwo = new GitUrlRewriteRule(baseUrl, "https://new-two.example/");
+        var unrelated = new GitUrlRewriteRule("git@unrelated:", "https://unrelated.example/");
+        var git = new FakeGitUrlRewriteStore();
+        git.Rules.AddRange([oldOne, oldTwo, unrelated]);
+        var service = new GitUrlRewriteService(ConfigStore(), git, new NoOpBackupService());
+        var plan = new GitRewritePlan();
+        plan.Removes.AddRange([oldOne, oldTwo]);
+        plan.Adds.AddRange([newOne, newTwo]);
+
+        var result = await service.ApplyPlanAsync(plan, "test exact target");
+
+        Assert.True(result.Success);
+        Assert.Equal(
+            [newOne.InsteadOfUrl, newTwo.InsteadOfUrl],
+            await git.GetValuesAsync(newOne.ConfigKey));
+        Assert.Contains(unrelated, git.Rules);
+    }
+
+    [Fact]
     public async Task Compare_MapsRulesToTheirServiceAndNamespace()
     {
         var gitLab = new GitServiceInstance
