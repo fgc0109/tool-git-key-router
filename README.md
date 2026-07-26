@@ -46,7 +46,7 @@ GitKeyRouter 以“管理方便、状态透明、操作可恢复”为目标：
 - Git rewrite 使用 `git config --global` 精确读写，不覆盖整个 `.gitconfig`
 - 危险操作先显示文本 diff 或结构化变更计划
 - 修改前创建快照，恢复操作本身也会先创建新快照
-- GUI 和 CLI 共享当前 Windows 用户的单实例锁，避免两个进程并发修改配置、SSH Config 或 Git Rewrite
+- GUI 和带 `--yes` 的写入型 CLI 共享当前 Windows 用户的单实例锁；只读、预览、诊断、测试、版本和帮助命令可在 GUI 运行时使用
 - 日志中的私钥块会被脱敏；日志默认每 5 MB 轮转并保留 3 份历史文件，日志写入失败不会中断主操作
 
 ## 系统要求
@@ -375,6 +375,8 @@ GitKeyRouter.exe help
 
 `apply` 默认只显示 SSH diff 和 Git rewrite 计划。只有带 `--yes` 才执行修改。`apply-profiles` 采用相同策略，默认只显示条件 Git Config diff。
 
+GUI 与带 `--yes` 的 `apply` / `apply-profiles` 共享排他锁，防止跨进程并发写入。其余 CLI 命令不取得该锁；`version` / `--version` 和 `help` / `--help` 还会在加载配置与创建应用服务之前直接返回，因此 GUI 运行时仍可用于脚本和发布验证。
+
 `test-route --connect` 必须同时提供真实 `--url`，避免程序对虚构仓库发起网络请求。
 
 CLI 诊断退出码：
@@ -383,7 +385,7 @@ CLI 诊断退出码：
 - `1`：存在警告
 - `2`：存在错误或连接测试失败
 - `3`：参数错误或程序自身执行失败
-- `4`：当前 Windows 用户已有一个 GitKeyRouter 实例运行
+- `4`：GUI 或带 `--yes` 的写入命令需要排他锁，但当前 Windows 用户已有 GitKeyRouter GUI 或写入操作运行
 
 ## 配置示例
 

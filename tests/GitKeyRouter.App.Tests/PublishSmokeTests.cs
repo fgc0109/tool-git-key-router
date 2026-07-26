@@ -157,102 +157,116 @@ public sealed class PublishSmokeTests
         var repositoryRoot = FindRepositoryRoot();
         var solutionPath = Path.Combine(repositoryRoot, "GitKeyRouter.sln");
         var projectPath = Path.Combine(repositoryRoot, "src", "GitKeyRouter.App", "GitKeyRouter.App.csproj");
-        var publishRoot = Path.Combine(repositoryRoot, "artifacts", "publish");
-        var releaseDirectory = Path.Combine(repositoryRoot, "artifacts", "release");
+        var temporaryRoot = Path.Combine(
+            Path.GetTempPath(),
+            "GitKeyRouter.PublishTests",
+            Guid.NewGuid().ToString("N"));
+        var publishRoot = Path.Combine(temporaryRoot, "publish");
+        var releaseDirectory = Path.Combine(temporaryRoot, "release");
         var prepareReleaseScript = Path.Combine(repositoryRoot, "scripts", "Prepare-ReleaseAssets.ps1");
         var versionDocument = XDocument.Load(Path.Combine(repositoryRoot, "Directory.Build.props"));
         var version = versionDocument.Descendants("Version").Single().Value;
 
-        var formatResult = await RunProcessAsync(
-            "dotnet",
-            ["format", solutionPath, "--no-restore"],
-            repositoryRoot,
-            TimeSpan.FromMinutes(3),
-            captureOutput: true);
-        Assert.True(
-            formatResult.ExitCode == 0,
-            $"dotnet format failed.{Environment.NewLine}{formatResult.StandardOutput}{Environment.NewLine}{formatResult.StandardError}");
+        try
+        {
+            var formatResult = await RunProcessAsync(
+                "dotnet",
+                ["format", solutionPath, "--no-restore"],
+                repositoryRoot,
+                TimeSpan.FromMinutes(3),
+                captureOutput: true);
+            Assert.True(
+                formatResult.ExitCode == 0,
+                $"dotnet format failed.{Environment.NewLine}{formatResult.StandardOutput}{Environment.NewLine}{formatResult.StandardError}");
 
-        var runtimeRestoreResult = await RunProcessAsync(
-            "dotnet",
-            [
-                "restore", projectPath, "-r", "win-x64", "--locked-mode",
+            var runtimeRestoreResult = await RunProcessAsync(
+                "dotnet",
+                [
+                    "restore", projectPath, "-r", "win-x64", "--locked-mode",
                 "-p:NuGetLockFilePath=packages.publish-win-x64.lock.json",
                 "-p:PublishSingleFile=true"
-            ],
-            repositoryRoot,
-            TimeSpan.FromMinutes(3),
-            captureOutput: true);
-        Assert.True(
-            runtimeRestoreResult.ExitCode == 0,
-            $"win-x64 locked restore failed.{Environment.NewLine}{runtimeRestoreResult.StandardOutput}{Environment.NewLine}{runtimeRestoreResult.StandardError}");
+                ],
+                repositoryRoot,
+                TimeSpan.FromMinutes(3),
+                captureOutput: true);
+            Assert.True(
+                runtimeRestoreResult.ExitCode == 0,
+                $"win-x64 locked restore failed.{Environment.NewLine}{runtimeRestoreResult.StandardOutput}{Environment.NewLine}{runtimeRestoreResult.StandardError}");
 
-        var variants = new[]
-        {
+            var variants = new[]
+            {
             new { Profile = "win-x64-single-file", Directory = "win-x64", MaximumMiB = 200L },
             new { Profile = "win-x64-framework-dependent", Directory = "win-x64-framework-dependent", MaximumMiB = 25L }
         };
 
-        foreach (var variant in variants)
-        {
-            var publishDirectory = Path.Combine(publishRoot, variant.Directory);
-            if (Directory.Exists(publishDirectory))
+            foreach (var variant in variants)
             {
-                Directory.Delete(publishDirectory, recursive: true);
-            }
+                var publishDirectory = Path.Combine(publishRoot, variant.Directory);
+                if (Directory.Exists(publishDirectory))
+                {
+                    Directory.Delete(publishDirectory, recursive: true);
+                }
 
-            var publishResult = await RunProcessAsync(
-                "dotnet",
-                [
-                    "publish", projectPath, "-c", "Release", "-r", "win-x64", "--no-restore",
+                var publishResult = await RunProcessAsync(
+                    "dotnet",
+                    [
+                        "publish", projectPath, "-c", "Release", "-r", "win-x64", "--no-restore",
                     $"-p:PublishProfile={variant.Profile}", "-o", publishDirectory
-                ],
-                repositoryRoot,
-                TimeSpan.FromMinutes(5),
-                captureOutput: true);
-            Assert.True(
-                publishResult.ExitCode == 0,
-                $"dotnet publish failed for {variant.Profile}.{Environment.NewLine}{publishResult.StandardOutput}{Environment.NewLine}{publishResult.StandardError}");
+                    ],
+                    repositoryRoot,
+                    TimeSpan.FromMinutes(5),
+                    captureOutput: true);
+                Assert.True(
+                    publishResult.ExitCode == 0,
+                    $"dotnet publish failed for {variant.Profile}.{Environment.NewLine}{publishResult.StandardOutput}{Environment.NewLine}{publishResult.StandardError}");
 
-            var entries = Directory.GetFileSystemEntries(publishDirectory);
-            var executablePath = Path.Combine(publishDirectory, "GitKeyRouter.exe");
-            Assert.Single(entries);
-            Assert.True(File.Exists(executablePath), $"Published EXE was not found: {executablePath}");
-            Assert.DoesNotContain(entries, path => path.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase));
-            Assert.InRange(new FileInfo(executablePath).Length, 1, variant.MaximumMiB * 1024 * 1024);
+                var entries = Directory.GetFileSystemEntries(publishDirectory);
+                var executablePath = Path.Combine(publishDirectory, "GitKeyRouter.exe");
+                Assert.Single(entries);
+                Assert.True(File.Exists(executablePath), $"Published EXE was not found: {executablePath}");
+                Assert.DoesNotContain(entries, path => path.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase));
+                Assert.InRange(new FileInfo(executablePath).Length, 1, variant.MaximumMiB * 1024 * 1024);
 
-            await using (var stream = File.OpenRead(executablePath))
-            {
-                Assert.Equal(0x4D, stream.ReadByte());
-                Assert.Equal(0x5A, stream.ReadByte());
+                await using (var stream = File.OpenRead(executablePath))
+                {
+                    Assert.Equal(0x4D, stream.ReadByte());
+                    Assert.Equal(0x5A, stream.ReadByte());
+                }
+
+                var versionResult = await RunProcessAsync(
+                    executablePath,
+                    ["--version"],
+                    repositoryRoot,
+                    TimeSpan.FromSeconds(30),
+                    captureOutput: true);
+                Assert.Equal(0, versionResult.ExitCode);
+                Assert.Contains(version, versionResult.StandardOutput, StringComparison.OrdinalIgnoreCase);
             }
 
-            var versionResult = await RunProcessAsync(
-                executablePath,
-                ["--version"],
-                repositoryRoot,
-                TimeSpan.FromSeconds(30),
-                captureOutput: true);
-            Assert.Equal(0, versionResult.ExitCode);
-            Assert.Contains(version, versionResult.StandardOutput, StringComparison.OrdinalIgnoreCase);
-        }
-
-        var releaseResult = await RunProcessAsync(
-            "powershell.exe",
-            [
-                "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            var releaseResult = await RunProcessAsync(
+                "powershell.exe",
+                [
+                    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                 "-File", prepareReleaseScript, "-Version", version,
                 "-PublishRoot", publishRoot, "-OutputDirectory", releaseDirectory
-            ],
-            repositoryRoot,
-            TimeSpan.FromMinutes(2),
-            captureOutput: true);
-        Assert.True(
-            releaseResult.ExitCode == 0,
-            $"Release packaging failed.{Environment.NewLine}{releaseResult.StandardOutput}{Environment.NewLine}{releaseResult.StandardError}");
-        Assert.True(File.Exists(Path.Combine(releaseDirectory, $"GitKeyRouter-v{version}-win-x64-portable.zip")));
-        Assert.True(File.Exists(Path.Combine(releaseDirectory, $"GitKeyRouter-v{version}-win-x64-framework-dependent.zip")));
-        Assert.True(File.Exists(Path.Combine(releaseDirectory, "SHA256SUMS.txt")));
+                ],
+                repositoryRoot,
+                TimeSpan.FromMinutes(2),
+                captureOutput: true);
+            Assert.True(
+                releaseResult.ExitCode == 0,
+                $"Release packaging failed.{Environment.NewLine}{releaseResult.StandardOutput}{Environment.NewLine}{releaseResult.StandardError}");
+            Assert.True(File.Exists(Path.Combine(releaseDirectory, $"GitKeyRouter-v{version}-win-x64-portable.zip")));
+            Assert.True(File.Exists(Path.Combine(releaseDirectory, $"GitKeyRouter-v{version}-win-x64-framework-dependent.zip")));
+            Assert.True(File.Exists(Path.Combine(releaseDirectory, "SHA256SUMS.txt")));
+        }
+        finally
+        {
+            if (Directory.Exists(temporaryRoot))
+            {
+                Directory.Delete(temporaryRoot, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -268,27 +282,33 @@ public sealed class PublishSmokeTests
             repositoryRoot,
             "scripts",
             "Test-WinX64Publish.ps1");
-        var publishRoot = Path.Combine(repositoryRoot, "artifacts", "publish");
+        var temporaryRoot = Path.Combine(
+            Path.GetTempPath(),
+            "GitKeyRouter.FrameworkPublishTests",
+            Guid.NewGuid().ToString("N"));
+        var publishRoot = Path.Combine(temporaryRoot, "publish");
         var publishDirectory = Path.Combine(publishRoot, "win-x64-framework-dependent");
         const string checksumFileName = "GitKeyRouter-win-x64-framework-dependent.sha256";
         var checksumPath = Path.Combine(publishRoot, checksumFileName);
 
-        if (Directory.Exists(publishDirectory))
+        try
         {
-            Directory.Delete(publishDirectory, recursive: true);
-        }
+            if (Directory.Exists(publishDirectory))
+            {
+                Directory.Delete(publishDirectory, recursive: true);
+            }
 
-        if (File.Exists(checksumPath))
-        {
-            File.Delete(checksumPath);
-        }
+            if (File.Exists(checksumPath))
+            {
+                File.Delete(checksumPath);
+            }
 
-        Directory.CreateDirectory(publishDirectory);
+            Directory.CreateDirectory(publishDirectory);
 
-        var publishResult = await RunProcessAsync(
-            "dotnet",
-            [
-                "publish",
+            var publishResult = await RunProcessAsync(
+                "dotnet",
+                [
+                    "publish",
                 projectPath,
                 "-c",
                 "Release",
@@ -297,37 +317,37 @@ public sealed class PublishSmokeTests
                 "-p:PublishProfile=win-x64-framework-dependent",
                 "-o",
                 publishDirectory
-            ],
-            repositoryRoot,
-            TimeSpan.FromMinutes(3),
-            captureOutput: true);
+                ],
+                repositoryRoot,
+                TimeSpan.FromMinutes(3),
+                captureOutput: true);
 
-        Assert.True(
-            publishResult.ExitCode == 0,
-            $"dotnet publish failed.{Environment.NewLine}{publishResult.StandardOutput}{Environment.NewLine}{publishResult.StandardError}");
+            Assert.True(
+                publishResult.ExitCode == 0,
+                $"dotnet publish failed.{Environment.NewLine}{publishResult.StandardOutput}{Environment.NewLine}{publishResult.StandardError}");
 
-        var entries = Directory.GetFileSystemEntries(publishDirectory);
-        Assert.True(
-            entries.Length == 1,
-            $"Expected only GitKeyRouter.exe, found: {string.Join(", ", entries.Select(Path.GetFileName))}");
+            var entries = Directory.GetFileSystemEntries(publishDirectory);
+            Assert.True(
+                entries.Length == 1,
+                $"Expected only GitKeyRouter.exe, found: {string.Join(", ", entries.Select(Path.GetFileName))}");
 
-        var executablePath = entries[0];
-        Assert.Equal("GitKeyRouter.exe", Path.GetFileName(executablePath));
-        Assert.True(File.Exists(executablePath));
+            var executablePath = entries[0];
+            Assert.Equal("GitKeyRouter.exe", Path.GetFileName(executablePath));
+            Assert.True(File.Exists(executablePath));
 
-        var executableInfo = new FileInfo(executablePath);
-        Assert.InRange(executableInfo.Length, 1, 25L * 1024 * 1024);
+            var executableInfo = new FileInfo(executablePath);
+            Assert.InRange(executableInfo.Length, 1, 25L * 1024 * 1024);
 
-        await using (var stream = File.OpenRead(executablePath))
-        {
-            Assert.Equal(0x4D, stream.ReadByte());
-            Assert.Equal(0x5A, stream.ReadByte());
-        }
+            await using (var stream = File.OpenRead(executablePath))
+            {
+                Assert.Equal(0x4D, stream.ReadByte());
+                Assert.Equal(0x5A, stream.ReadByte());
+            }
 
-        var validationResult = await RunProcessAsync(
-            "powershell.exe",
-            [
-                "-NoProfile",
+            var validationResult = await RunProcessAsync(
+                "powershell.exe",
+                [
+                    "-NoProfile",
                 "-NonInteractive",
                 "-ExecutionPolicy",
                 "Bypass",
@@ -337,22 +357,30 @@ public sealed class PublishSmokeTests
                 publishDirectory,
                 "-ChecksumFileName",
                 checksumFileName
-            ],
-            repositoryRoot,
-            TimeSpan.FromSeconds(30),
-            captureOutput: true);
+                ],
+                repositoryRoot,
+                TimeSpan.FromSeconds(30),
+                captureOutput: true);
 
-        Assert.True(
-            validationResult.ExitCode == 0,
-            $"Publish validation script failed.{Environment.NewLine}{validationResult.StandardOutput}{Environment.NewLine}{validationResult.StandardError}");
-        Assert.True(
-            File.Exists(checksumPath),
-            "Publish validation must create a SHA-256 checksum file.");
+            Assert.True(
+                validationResult.ExitCode == 0,
+                $"Publish validation script failed.{Environment.NewLine}{validationResult.StandardOutput}{Environment.NewLine}{validationResult.StandardError}");
+            Assert.True(
+                File.Exists(checksumPath),
+                "Publish validation must create a SHA-256 checksum file.");
 
-        await using var hashStream = File.OpenRead(executablePath);
-        var expectedHash = Convert.ToHexString(await SHA256.HashDataAsync(hashStream));
-        var checksumContent = await File.ReadAllTextAsync(checksumPath);
-        Assert.Equal($"{expectedHash}  GitKeyRouter.exe\r\n", checksumContent);
+            await using var hashStream = File.OpenRead(executablePath);
+            var expectedHash = Convert.ToHexString(await SHA256.HashDataAsync(hashStream));
+            var checksumContent = await File.ReadAllTextAsync(checksumPath);
+            Assert.Equal($"{expectedHash}  GitKeyRouter.exe\r\n", checksumContent);
+        }
+        finally
+        {
+            if (Directory.Exists(temporaryRoot))
+            {
+                Directory.Delete(temporaryRoot, recursive: true);
+            }
+        }
     }
 
     [Fact]

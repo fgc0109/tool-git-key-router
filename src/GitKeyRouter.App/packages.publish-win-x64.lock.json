@@ -14,7 +14,7 @@
       "gitkeyrouter.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "GitKeyRouter.Core": "[0.4.7, )"
+          "GitKeyRouter.Core": "[0.4.8, )"
         }
       }
     },

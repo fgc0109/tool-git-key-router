@@ -12,9 +12,32 @@ public sealed class CliApplication
         _services = services;
     }
 
+    public static bool CanRunWithoutServices(string[] args)
+        => args.Length > 0 && NormalizeCommand(args) is "version" or "--version" or "-v" or "help" or "--help" or "-h";
+
+    public static int RunWithoutServices(string[] args)
+        => NormalizeCommand(args) switch
+        {
+            "version" or "--version" or "-v" => PrintVersion(),
+            "help" or "--help" or "-h" => PrintHelp(),
+            _ => throw new ArgumentException("The command requires application services.", nameof(args))
+        };
+
+    public static bool RequiresExclusiveInstance(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            return true;
+        }
+
+        var command = NormalizeCommand(args);
+        return command is "apply" or "apply-profiles"
+            && args.Skip(1).Contains("--yes", StringComparer.OrdinalIgnoreCase);
+    }
+
     public async Task<int> RunAsync(string[] args, CancellationToken cancellationToken = default)
     {
-        var command = args[0].Trim().ToLowerInvariant();
+        var command = NormalizeCommand(args);
         return command switch
         {
             "diagnose" => await DiagnoseAsync(cancellationToken).ConfigureAwait(false),
@@ -347,6 +370,9 @@ public sealed class CliApplication
         PrintHelp();
         return 3;
     }
+
+    private static string NormalizeCommand(string[] args)
+        => args.Length == 0 ? string.Empty : args[0].Trim().ToLowerInvariant();
 
     private static string? GetOption(string[] args, string option)
     {

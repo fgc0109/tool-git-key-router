@@ -9,8 +9,16 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        using var instanceGuard = SingleInstanceGuard.TryAcquire();
-        if (!instanceGuard.IsPrimaryInstance)
+        if (CliApplication.CanRunWithoutServices(args))
+        {
+            ConsoleBridge.Attach();
+            return CliApplication.RunWithoutServices(args);
+        }
+
+        using var instanceGuard = CliApplication.RequiresExclusiveInstance(args)
+            ? SingleInstanceGuard.TryAcquire()
+            : null;
+        if (instanceGuard is { IsPrimaryInstance: false })
         {
             return ReportExistingInstance(args.Length > 0);
         }

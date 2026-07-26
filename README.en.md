@@ -46,7 +46,7 @@ GitKeyRouter is designed around convenient management, transparent state, and re
 - Git rewrites are read and written precisely through `git config --global`; the complete `.gitconfig` is never replaced.
 - Dangerous operations show a text diff or structured change plan first.
 - A snapshot is created before changes, and restore operations create another safety snapshot before restoring.
-- The GUI and CLI share a single-instance lock for the current Windows user, preventing concurrent writes to application configuration, SSH Config, or Git rewrites.
+- The GUI and write-capable CLI commands used with `--yes` share a single-instance lock for the current Windows user. Read-only, preview, diagnostic, test, version, and help commands remain available while the GUI is running.
 - Private-key blocks are redacted from logs. Logs rotate at 5 MB by default, retain three historical files, and never interrupt the primary operation when logging fails.
 
 ## System requirements
@@ -375,6 +375,8 @@ GitKeyRouter.exe help
 
 `apply` displays the SSH diff and Git rewrite plan by default. Changes are executed only with `--yes`. `apply-profiles` follows the same policy and displays the conditional Git Config diff by default.
 
+The GUI and `apply --yes` / `apply-profiles --yes` share the exclusive lock to prevent cross-process writes. Other CLI commands do not acquire it. `version` / `--version` and `help` / `--help` return before configuration loading or application-service construction, so scripts and release validation can use them while the GUI is running.
+
 `test-route --connect` also requires a real `--url`, preventing the application from sending network requests for an invented repository.
 
 CLI diagnostic exit codes:
@@ -383,7 +385,7 @@ CLI diagnostic exit codes:
 - `1`: warnings exist
 - `2`: errors exist or a connection test failed
 - `3`: invalid arguments or an application execution failure
-- `4`: another GitKeyRouter instance is already running for the current Windows user
+- `4`: GUI startup or a `--yes` write command requires the exclusive lock while another GUI or write operation is already running for the current Windows user
 
 ## Configuration example
 
