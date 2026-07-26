@@ -36,77 +36,106 @@ public sealed class BackupService : IBackupService
     public async Task<BackupManifest> CreateSnapshotAsync(string reason, CancellationToken cancellationToken = default)
     {
         _fileSystem.CreateDirectory(_paths.BackupRootDirectory);
-        var directory = CreateUniqueDirectoryName();
-        _fileSystem.CreateDirectory(directory);
+        var finalDirectory = CreateUniqueDirectoryName();
+        var pendingDirectory = Path.Combine(
+            _paths.BackupRootDirectory,
+            $".pending-{Guid.NewGuid():N}");
+        _fileSystem.CreateDirectory(pendingDirectory);
 
-        var appExists = _fileSystem.FileExists(_paths.ConfigPath);
-        var sshExists = _fileSystem.FileExists(_paths.SshConfigPath);
-        int? appConfigSchemaVersion = null;
-        if (appExists)
-        {
-            _fileSystem.CopyFile(_paths.ConfigPath, Path.Combine(directory, AppConfigFileName), true);
-            var appConfigText = await _fileSystem.ReadAllTextAsync(_paths.ConfigPath, cancellationToken).ConfigureAwait(false);
-            appConfigSchemaVersion = TryReadAppConfigSchemaVersion(appConfigText);
-        }
-
-        if (sshExists)
-        {
-            _fileSystem.CopyFile(_paths.SshConfigPath, Path.Combine(directory, SshConfigFileName), true);
-        }
-
-        IReadOnlyList<GitUrlRewriteRule> rewrites = [];
-        string? gitCaptureError = null;
         try
         {
-            rewrites = await _gitStore.GetAllAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            gitCaptureError = exception.Message;
-        }
+            var appExists = _fileSystem.FileExists(_paths.ConfigPath);
+            var sshExists = _fileSystem.FileExists(_paths.SshConfigPath);
+            int? appConfigSchemaVersion = null;
+            if (appExists)
+            {
+                var stagedAppPath = Path.Combine(pendingDirectory, AppConfigFileName);
+                _fileSystem.CopyFile(_paths.ConfigPath, stagedAppPath, true);
+                var appConfigText = await _fileSystem.ReadAllTextAsync(
+                    stagedAppPath,
+                    cancellationToken).ConfigureAwait(false);
+                appConfigSchemaVersion = TryReadAppConfigSchemaVersion(appConfigText);
+            }
 
-        await _fileSystem.WriteAllTextAtomicAsync(
-            Path.Combine(directory, GitRewritesFileName),
-            JsonSerializer.Serialize(rewrites, JsonOptions) + Environment.NewLine,
-            cancellationToken).ConfigureAwait(false);
+            if (sshExists)
+            {
+                _fileSystem.CopyFile(
+                    _paths.SshConfigPath,
+                    Path.Combine(pendingDirectory, SshConfigFileName),
+                    true);
+            }
 
-        var files = new Dictionary<string, BackupFileIntegrity>(StringComparer.OrdinalIgnoreCase);
-        if (appExists)
-        {
-            files[AppConfigFileName] = await GetIntegrityAsync(
-                Path.Combine(directory, AppConfigFileName),
+            IReadOnlyList<GitUrlRewriteRule> rewrites = [];
+            string? gitCaptureError = null;
+            try
+            {
+                rewrites = await _gitStore.GetAllAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                gitCaptureError = exception.Message;
+            }
+
+            await _fileSystem.WriteAllTextAtomicAsync(
+                Path.Combine(pendingDirectory, GitRewritesFileName),
+                JsonSerializer.Serialize(rewrites, JsonOptions) + Environment.NewLine,
                 cancellationToken).ConfigureAwait(false);
-        }
 
-        if (sshExists)
-        {
-            files[SshConfigFileName] = await GetIntegrityAsync(
-                Path.Combine(directory, SshConfigFileName),
+            var files = new Dictionary<string, BackupFileIntegrity>(StringComparer.OrdinalIgnoreCase);
+            if (appExists)
+            {
+                files[AppConfigFileName] = await GetIntegrityAsync(
+                    Path.Combine(pendingDirectory, AppConfigFileName),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            if (sshExists)
+            {
+                files[SshConfigFileName] = await GetIntegrityAsync(
+                    Path.Combine(pendingDirectory, SshConfigFileName),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            files[GitRewritesFileName] = await GetIntegrityAsync(
+                Path.Combine(pendingDirectory, GitRewritesFileName),
                 cancellationToken).ConfigureAwait(false);
+
+            var manifest = new BackupManifest
+            {
+                CreatedAt = _clock.UtcNow,
+                Reason = reason,
+                BackupDirectory = finalDirectory,
+                ApplicationVersion = typeof(BackupService).Assembly.GetName().Version?.ToString(),
+                AppConfigExisted = appExists,
+                AppConfigSchemaVersion = appConfigSchemaVersion,
+                SshConfigExisted = sshExists,
+                GitRewriteCount = rewrites.Count,
+                GitRewriteCaptureError = gitCaptureError,
+                Files = files
+            };
+            await _fileSystem.WriteAllTextAtomicAsync(
+                Path.Combine(pendingDirectory, ManifestFileName),
+                JsonSerializer.Serialize(manifest, JsonOptions) + Environment.NewLine,
+                cancellationToken).ConfigureAwait(false);
+
+            await VerifyPreparedSnapshotAsync(
+                pendingDirectory,
+                finalDirectory,
+                cancellationToken).ConfigureAwait(false);
+            _fileSystem.MoveDirectory(pendingDirectory, finalDirectory);
+            return manifest;
         }
-
-        files[GitRewritesFileName] = await GetIntegrityAsync(
-            Path.Combine(directory, GitRewritesFileName),
-            cancellationToken).ConfigureAwait(false);
-
-        var manifest = new BackupManifest
+        finally
         {
-            CreatedAt = _clock.UtcNow,
-            Reason = reason,
-            BackupDirectory = directory,
-            ApplicationVersion = typeof(BackupService).Assembly.GetName().Version?.ToString(),
-            AppConfigExisted = appExists,
-            AppConfigSchemaVersion = appConfigSchemaVersion,
-            SshConfigExisted = sshExists,
-            GitRewriteCount = rewrites.Count,
-            GitRewriteCaptureError = gitCaptureError,
-            Files = files
-        };
-        await _fileSystem.WriteAllTextAtomicAsync(
-            Path.Combine(directory, ManifestFileName),
-            JsonSerializer.Serialize(manifest, JsonOptions) + Environment.NewLine,
-            cancellationToken).ConfigureAwait(false);
-        return manifest;
+            if (_fileSystem.DirectoryExists(pendingDirectory))
+            {
+                _fileSystem.DeleteDirectory(pendingDirectory, true);
+            }
+        }
     }
 
     public async Task<IReadOnlyList<BackupManifest>> ListAsync(CancellationToken cancellationToken = default)
@@ -114,6 +143,11 @@ public sealed class BackupService : IBackupService
         var manifests = new List<BackupManifest>();
         foreach (var directory in _fileSystem.EnumerateDirectories(_paths.BackupRootDirectory))
         {
+            if (Path.GetFileName(directory).StartsWith(".pending-", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             var path = Path.Combine(directory, ManifestFileName);
             if (!_fileSystem.FileExists(path))
             {
@@ -360,6 +394,32 @@ public sealed class BackupService : IBackupService
             Length = bytes.LongLength,
             Sha256 = Convert.ToHexString(SHA256.HashData(bytes))
         };
+    }
+
+    private async Task VerifyPreparedSnapshotAsync(
+        string pendingDirectory,
+        string finalDirectory,
+        CancellationToken cancellationToken)
+    {
+        var manifestPath = Path.Combine(pendingDirectory, ManifestFileName);
+        var manifestText = await _fileSystem.ReadAllTextAsync(
+            manifestPath,
+            cancellationToken).ConfigureAwait(false);
+        var persistedManifest = JsonSerializer.Deserialize<BackupManifest>(manifestText, JsonOptions)
+            ?? throw new InvalidDataException("Prepared backup manifest is invalid.");
+        persistedManifest.Files ??= new Dictionary<string, BackupFileIntegrity>(StringComparer.OrdinalIgnoreCase);
+        if (!string.Equals(
+                persistedManifest.BackupDirectory,
+                finalDirectory,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("Prepared backup manifest does not reference its final directory.");
+        }
+
+        await ValidateIntegrityAsync(
+            pendingDirectory,
+            persistedManifest,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task ValidateIntegrityAsync(

@@ -10,6 +10,8 @@ public interface IFileSystem
 
     void DeleteDirectory(string path, bool recursive);
 
+    void MoveDirectory(string sourcePath, string destinationPath);
+
     Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default);
 
     Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default);

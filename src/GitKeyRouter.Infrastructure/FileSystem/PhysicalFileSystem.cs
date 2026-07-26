@@ -19,6 +19,17 @@ public sealed class PhysicalFileSystem : IFileSystem
         }
     }
 
+    public void MoveDirectory(string sourcePath, string destinationPath)
+    {
+        var parent = Path.GetDirectoryName(destinationPath);
+        if (!string.IsNullOrWhiteSpace(parent))
+        {
+            Directory.CreateDirectory(parent);
+        }
+
+        Directory.Move(sourcePath, destinationPath);
+    }
+
     public Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default)
         => File.ReadAllTextAsync(path, Encoding.UTF8, cancellationToken);
 

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using GitKeyRouter.Core.Abstractions;
 using GitKeyRouter.Core.Models;
 using GitKeyRouter.Infrastructure.Backup;
 using GitKeyRouter.Infrastructure.FileSystem;
@@ -9,6 +10,74 @@ namespace GitKeyRouter.Tests;
 
 public sealed class BackupServiceTests
 {
+    [Fact]
+    public async Task CreateSnapshot_PublishesOnlyCompletedDirectory()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var service = new BackupService(
+            paths,
+            new PhysicalFileSystem(),
+            new FakeGitUrlRewriteStore(),
+            new TestClock());
+
+        var manifest = await service.CreateSnapshotAsync("atomic publish");
+
+        Assert.True(Directory.Exists(manifest.BackupDirectory));
+        Assert.True(File.Exists(Path.Combine(manifest.BackupDirectory, "manifest.json")));
+        Assert.False(Path.GetFileName(manifest.BackupDirectory).StartsWith(".pending-", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(Directory.EnumerateDirectories(paths.BackupRootDirectory, ".pending-*"));
+    }
+
+    [Fact]
+    public async Task CreateSnapshot_CleansPendingDirectoryWhenPreparationFails()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var fileSystem = new FaultingFileSystem { FailManifestWrite = true };
+        var service = new BackupService(paths, fileSystem, new FakeGitUrlRewriteStore(), new TestClock());
+
+        await Assert.ThrowsAsync<IOException>(() => service.CreateSnapshotAsync("preparation failure"));
+
+        Assert.Empty(Directory.EnumerateDirectories(paths.BackupRootDirectory));
+    }
+
+    [Fact]
+    public async Task CreateSnapshot_CleansPendingDirectoryWhenPublishFails()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var fileSystem = new FaultingFileSystem { FailDirectoryMove = true };
+        var service = new BackupService(paths, fileSystem, new FakeGitUrlRewriteStore(), new TestClock());
+
+        await Assert.ThrowsAsync<IOException>(() => service.CreateSnapshotAsync("publish failure"));
+
+        Assert.Empty(Directory.EnumerateDirectories(paths.BackupRootDirectory));
+    }
+
+    [Fact]
+    public async Task ListAsync_IgnoresPendingDirectories()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var service = new BackupService(
+            paths,
+            new PhysicalFileSystem(),
+            new FakeGitUrlRewriteStore(),
+            new TestClock());
+        var manifest = await service.CreateSnapshotAsync("completed");
+        var pendingDirectory = Path.Combine(paths.BackupRootDirectory, ".pending-test");
+        Directory.CreateDirectory(pendingDirectory);
+        File.Copy(
+            Path.Combine(manifest.BackupDirectory, "manifest.json"),
+            Path.Combine(pendingDirectory, "manifest.json"));
+
+        var backups = await service.ListAsync();
+
+        var backup = Assert.Single(backups);
+        Assert.Equal(manifest.BackupDirectory, backup.BackupDirectory);
+    }
+
     [Fact]
     public async Task SnapshotAndRestore_PreservesAllThreeConfigurationTypes()
     {
@@ -143,5 +212,65 @@ public sealed class BackupServiceTests
         Assert.False(result.Success);
         Assert.Contains("restored automatically", result.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal([originalRule], git.Rules);
+    }
+
+    private sealed class FaultingFileSystem : IFileSystem
+    {
+        private readonly PhysicalFileSystem _inner = new();
+
+        public bool FailManifestWrite { get; init; }
+
+        public bool FailDirectoryMove { get; init; }
+
+        public bool FileExists(string path) => _inner.FileExists(path);
+
+        public bool DirectoryExists(string path) => _inner.DirectoryExists(path);
+
+        public void CreateDirectory(string path) => _inner.CreateDirectory(path);
+
+        public void DeleteDirectory(string path, bool recursive) => _inner.DeleteDirectory(path, recursive);
+
+        public void MoveDirectory(string sourcePath, string destinationPath)
+        {
+            if (FailDirectoryMove)
+            {
+                throw new IOException("Simulated directory publication failure.");
+            }
+
+            _inner.MoveDirectory(sourcePath, destinationPath);
+        }
+
+        public Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default)
+            => _inner.ReadAllTextAsync(path, cancellationToken);
+
+        public Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
+            => _inner.ReadAllBytesAsync(path, cancellationToken);
+
+        public Task WriteAllTextAtomicAsync(
+            string path,
+            string content,
+            CancellationToken cancellationToken = default)
+        {
+            if (FailManifestWrite
+                && string.Equals(Path.GetFileName(path), "manifest.json", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("Simulated manifest write failure.");
+            }
+
+            return _inner.WriteAllTextAtomicAsync(path, content, cancellationToken);
+        }
+
+        public void CopyFile(string sourcePath, string destinationPath, bool overwrite)
+            => _inner.CopyFile(sourcePath, destinationPath, overwrite);
+
+        public void MoveFile(string sourcePath, string destinationPath, bool overwrite)
+            => _inner.MoveFile(sourcePath, destinationPath, overwrite);
+
+        public void DeleteFile(string path) => _inner.DeleteFile(path);
+
+        public IEnumerable<string> EnumerateDirectories(string path) => _inner.EnumerateDirectories(path);
+
+        public IEnumerable<string> EnumerateFiles(string path, string searchPattern)
+            => _inner.EnumerateFiles(path, searchPattern);
     }
 }
