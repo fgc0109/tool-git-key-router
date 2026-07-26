@@ -20,6 +20,8 @@ Git/OpenSSH commands use `ProcessStartInfo` with `UseShellExecute = false` and a
 
 `ProcessRunner` reads stdout and stderr asynchronously with independent line limits and a per-line character limit. Truncated output preserves a head and tail summary and sets `StandardOutputTruncated` or `StandardErrorTruncated`. Results distinguish startup failure, user cancellation, timeout, non-zero exit, and process-tree termination failure (`KillFailed` / `TerminationError`).
 
+`SafeFileLogger` sends messages and exception text through a bounded redaction pipeline before writing. Generated non-backtracking regular expressions remove private-key blocks, credential URL user-info, Authorization Bearer values, common password/token/secret and ASKPASS assignments, and prefixed GitHub/GitLab tokens. After the multiline private-key pass, credential matching is line-scoped to keep long logs linear. Plain URLs, paths, SSH public keys/fingerprints, and unprefixed commit SHA values remain readable.
+
 ## Application instance boundary
 
 GUI startup and confirmed write commands (`apply --yes`, `apply-profiles --yes`) share a per-Windows-user mutex. Read-only, preview, diagnostic, parsing, and connection-test CLI commands do not take the exclusive lock. Version and help commands return before application-service construction.

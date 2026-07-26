@@ -22,6 +22,23 @@ public sealed class SafeFileLoggerTests
     }
 
     [Fact]
+    public void Write_RedactsCredentialsInMessagesAndExceptions()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var logger = new SafeFileLogger(paths, maxFileBytes: 4096, retainedFileCount: 2);
+
+        logger.Error(
+            "remote=https://alice:hunter2@example.com/repo.git",
+            new InvalidOperationException("Authorization: Bearer exception-token"));
+
+        var content = File.ReadAllText(Path.Combine(paths.AppDataDirectory, "gitkeyrouter.log"));
+        Assert.DoesNotContain("hunter2", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception-token", content, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Write_RotatesAndHonorsRetentionLimit()
     {
         using var temp = new TemporaryDirectory();

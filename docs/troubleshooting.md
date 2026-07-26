@@ -8,6 +8,8 @@ Every Git, SSH, and ssh-keygen action exposes the executable path, arguments, st
 
 `StandardOutputTruncated` or `StandardErrorTruncated` means the external program exceeded GitKeyRouter's bounded output retention. The result keeps a head and tail summary rather than every line. Re-run the command directly only if the retained diagnostic is insufficient, and review output for credentials before sharing it.
 
+GitKeyRouter log files redact private-key blocks, credential URLs, Bearer values, common secret assignments, ASKPASS values, and prefixed GitHub/GitLab tokens. Plain paths, public keys/fingerprints, and commit SHA values remain for diagnosis. Redaction is a safety layer rather than a guarantee for every future credential format: review a log before sharing it outside your trusted environment.
+
 ### Process timed out or was cancelled
 
 - `TimedOut` means the configured timeout elapsed.

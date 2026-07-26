@@ -90,8 +90,8 @@
       "GitKeyRouter": {
         "type": "Project",
         "dependencies": {
-          "GitKeyRouter.Core": "[0.4.12, )",
-          "GitKeyRouter.Infrastructure": "[0.4.12, )"
+          "GitKeyRouter.Core": "[0.4.13, )",
+          "GitKeyRouter.Infrastructure": "[0.4.13, )"
         }
       },
       "gitkeyrouter.core": {
@@ -100,7 +100,7 @@
       "gitkeyrouter.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "GitKeyRouter.Core": "[0.4.12, )"
+          "GitKeyRouter.Core": "[0.4.13, )"
         }
       }
     },
