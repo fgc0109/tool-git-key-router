@@ -114,9 +114,9 @@ When a target file already exists, the user can:
 
 - Cancel
 - Return to identity editing and choose another filename
-- Explicitly overwrite it; before overwriting, the old key is backed up as `.gitkeyrouter.<timestamp>.bak`
+- Explicitly overwrite it; the new pair is first generated and validated at a unique temporary path, the old files are then backed up as `.gitkeyrouter.<timestamp>.<unique>.bak`, and only then are the live files replaced
 
-After generation, the complete public key is displayed and can be copied or exported.
+If `ssh-keygen` fails, produces an incomplete pair, emits an invalid public key, is cancelled, live-file replacement fails, or another process creates a previously absent target during generation, GitKeyRouter does not overwrite the newly appeared file. Original keys remain in place or are restored from backup, and temporary files are cleaned up. After successful generation, the complete public key is displayed and can be copied or exported.
 
 GitKeyRouter recognizes multiple public-key formats in the same identity directory and shows each format as a separate row on the **Git Identities** page:
 

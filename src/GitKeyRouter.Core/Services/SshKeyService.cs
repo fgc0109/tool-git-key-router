@@ -257,8 +257,16 @@ public sealed partial class SshKeyService
                 "Enable the Windows OpenSSH Client or install Git for Windows. GitKeyRouter will not install it automatically.");
         }
 
-        var existingFiles = new[] { identity.PrivateKeyPath, identity.PublicKeyPath }
+        if (PathsEqual(identity.PrivateKeyPath, identity.PublicKeyPath))
+        {
+            return OperationResult<SshKeyGenerationResult>.Fail(
+                "The private-key and public-key paths must be different.");
+        }
+
+        var targetPaths = new[] { identity.PrivateKeyPath, identity.PublicKeyPath };
+        var existingFiles = targetPaths
             .Where(_fileSystem.FileExists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (existingFiles.Count > 0 && !overwrite)
         {
@@ -267,52 +275,170 @@ public sealed partial class SshKeyService
                 existingFiles.ToArray());
         }
 
-        var keyDirectory = Path.GetDirectoryName(identity.PrivateKeyPath);
-        if (string.IsNullOrWhiteSpace(keyDirectory))
+        var privateKeyDirectory = Path.GetDirectoryName(identity.PrivateKeyPath);
+        var publicKeyDirectory = Path.GetDirectoryName(identity.PublicKeyPath);
+        if (string.IsNullOrWhiteSpace(privateKeyDirectory) || string.IsNullOrWhiteSpace(publicKeyDirectory))
         {
-            return OperationResult<SshKeyGenerationResult>.Fail("The private key path has no valid parent directory.");
+            return OperationResult<SshKeyGenerationResult>.Fail("The key paths must have valid parent directories.");
         }
 
-        _fileSystem.CreateDirectory(keyDirectory);
+        _fileSystem.CreateDirectory(privateKeyDirectory);
+        _fileSystem.CreateDirectory(publicKeyDirectory);
+        var temporaryPrivatePath = Path.Combine(
+            privateKeyDirectory,
+            $".{Path.GetFileName(identity.PrivateKeyPath)}.gitkeyrouter.{Guid.NewGuid():N}.tmp");
+        var temporaryPublicPath = temporaryPrivatePath + ".pub";
         var backups = new List<string>();
-        if (overwrite)
+        var backupByTarget = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var promotedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var originallyExisting = existingFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        try
         {
-            foreach (var existingFile in existingFiles)
+            var comment = string.IsNullOrWhiteSpace(identity.EmailOrComment)
+                ? identity.AccountName
+                : identity.EmailOrComment;
+            var process = await _processRunner.RunAsync(new ProcessRequest
             {
-                var backupPath = $"{existingFile}.gitkeyrouter.{_clock.LocalNow:yyyyMMdd-HHmmss}.bak";
-                _fileSystem.CopyFile(existingFile, backupPath, false);
-                backups.Add(backupPath);
-                _fileSystem.DeleteFile(existingFile);
+                ExecutablePath = tools.SshKeygen.SelectedPath,
+                Arguments = ["-t", "ed25519", "-C", comment, "-f", temporaryPrivatePath, "-N", string.Empty],
+                Timeout = TimeSpan.FromSeconds(30)
+            }, cancellationToken).ConfigureAwait(false);
+
+            if (!process.Succeeded)
+            {
+                return OperationResult<SshKeyGenerationResult>.Fail(
+                    "ssh-keygen failed. Existing key files were left unchanged.",
+                    $"Exit code: {process.ExitCode}",
+                    process.StandardOutput,
+                    process.StandardError);
+            }
+
+            if (!_fileSystem.FileExists(temporaryPrivatePath) || !_fileSystem.FileExists(temporaryPublicPath))
+            {
+                return OperationResult<SshKeyGenerationResult>.Fail(
+                    "ssh-keygen did not produce a complete key pair. Existing key files were left unchanged.",
+                    !_fileSystem.FileExists(temporaryPrivatePath)
+                        ? "The generated private-key file is missing."
+                        : "The generated public-key file is missing.");
+            }
+
+            var publicKey = await ReadPublicKeyAsync(
+                temporaryPublicPath,
+                requireOpenSsh: true,
+                cancellationToken).ConfigureAwait(false);
+            if (!publicKey.Success || string.IsNullOrWhiteSpace(publicKey.Value))
+            {
+                return OperationResult<SshKeyGenerationResult>.Fail(
+                    "The generated public key could not be validated. Existing key files were left unchanged.",
+                    publicKey.Errors.Prepend(publicKey.Message).ToArray());
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (overwrite)
+            {
+                foreach (var existingFile in existingFiles)
+                {
+                    var backupPath = $"{existingFile}.gitkeyrouter.{_clock.LocalNow:yyyyMMdd-HHmmss}.{Guid.NewGuid():N}.bak";
+                    _fileSystem.CopyFile(existingFile, backupPath, false);
+                    backups.Add(backupPath);
+                    backupByTarget[existingFile] = backupPath;
+                }
+            }
+
+            PromoteGeneratedFile(
+                temporaryPrivatePath,
+                identity.PrivateKeyPath,
+                originallyExisting.Contains(identity.PrivateKeyPath),
+                promotedTargets);
+            PromoteGeneratedFile(
+                temporaryPublicPath,
+                identity.PublicKeyPath,
+                originallyExisting.Contains(identity.PublicKeyPath),
+                promotedTargets);
+
+            return OperationResult<SshKeyGenerationResult>.Ok(new SshKeyGenerationResult
+            {
+                Identity = identity,
+                Process = process,
+                PublicKeyText = publicKey.Value,
+                BackupFiles = backups
+            }, "SSH key generated. The key has no passphrase.");
+        }
+        catch (OperationCanceledException)
+        {
+            var rollbackErrors = RollBackGeneratedFiles(targetPaths, existingFiles, backupByTarget, promotedTargets);
+            return OperationResult<SshKeyGenerationResult>.Fail(
+                "SSH key generation was cancelled. Existing key files were restored.",
+                rollbackErrors.ToArray());
+        }
+        catch (Exception exception)
+        {
+            var rollbackErrors = RollBackGeneratedFiles(targetPaths, existingFiles, backupByTarget, promotedTargets);
+            return OperationResult<SshKeyGenerationResult>.Fail(
+                "Unable to generate the SSH key pair. Existing key files were restored.",
+                new[] { exception.Message }.Concat(rollbackErrors).ToArray());
+        }
+        finally
+        {
+            TryDeleteFile(temporaryPrivatePath);
+            TryDeleteFile(temporaryPublicPath);
+        }
+    }
+
+    private void PromoteGeneratedFile(
+        string temporaryPath,
+        string targetPath,
+        bool overwrite,
+        ISet<string> promotedTargets)
+    {
+        _fileSystem.MoveFile(temporaryPath, targetPath, overwrite);
+        promotedTargets.Add(targetPath);
+    }
+
+    private List<string> RollBackGeneratedFiles(
+        IEnumerable<string> targetPaths,
+        IReadOnlyCollection<string> existingFiles,
+        IReadOnlyDictionary<string, string> backupByTarget,
+        IReadOnlySet<string> promotedTargets)
+    {
+        var rollbackErrors = new List<string>();
+        var originallyExisting = existingFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var targetPath in targetPaths.Reverse())
+        {
+            try
+            {
+                if (originallyExisting.Contains(targetPath))
+                {
+                    if (backupByTarget.TryGetValue(targetPath, out var backupPath))
+                    {
+                        _fileSystem.CopyFile(backupPath, targetPath, true);
+                    }
+                }
+                else if (promotedTargets.Contains(targetPath))
+                {
+                    _fileSystem.DeleteFile(targetPath);
+                }
+            }
+            catch (Exception exception)
+            {
+                rollbackErrors.Add($"Unable to restore '{targetPath}': {exception.Message}");
             }
         }
 
-        var comment = string.IsNullOrWhiteSpace(identity.EmailOrComment)
-            ? identity.AccountName
-            : identity.EmailOrComment;
-        var process = await _processRunner.RunAsync(new ProcessRequest
-        {
-            ExecutablePath = tools.SshKeygen.SelectedPath,
-            Arguments = ["-t", "ed25519", "-C", comment, "-f", identity.PrivateKeyPath, "-N", string.Empty],
-            Timeout = TimeSpan.FromSeconds(30)
-        }, cancellationToken).ConfigureAwait(false);
+        return rollbackErrors;
+    }
 
-        if (!process.Succeeded)
+    private void TryDeleteFile(string path)
+    {
+        try
         {
-            return OperationResult<SshKeyGenerationResult>.Fail(
-                "ssh-keygen failed.",
-                $"Exit code: {process.ExitCode}",
-                process.StandardOutput,
-                process.StandardError);
+            _fileSystem.DeleteFile(path);
         }
-
-        var publicKey = await ReadPublicKeyAsync(identity, cancellationToken).ConfigureAwait(false);
-        return OperationResult<SshKeyGenerationResult>.Ok(new SshKeyGenerationResult
+        catch
         {
-            Identity = identity,
-            Process = process,
-            PublicKeyText = publicKey.Value ?? string.Empty,
-            BackupFiles = backups
-        }, "SSH key generated. The key has no passphrase.");
+            // Best-effort cleanup must not hide the generation or rollback result.
+        }
     }
 
     public async Task<OperationResult<SshKeyConversionResult>> ConvertPublicKeyAsync(

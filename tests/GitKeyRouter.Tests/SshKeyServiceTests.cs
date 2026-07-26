@@ -108,6 +108,113 @@ public sealed class SshKeyServiceTests
     }
 
     [Fact]
+    public async Task GenerateFailurePreservesExistingKeyPairAndCleansTemporaryFiles()
+    {
+        using var directory = new TemporaryDirectory();
+        var identity = CreateIdentity(directory.Path);
+        await File.WriteAllTextAsync(identity.PrivateKeyPath, "old private");
+        await File.WriteAllTextAsync(identity.PublicKeyPath, "old public");
+        var runner = new StubProcessRunner(request =>
+        {
+            var temporaryPrivatePath = GeneratedPrivatePath(request);
+            File.WriteAllText(temporaryPrivatePath, "partial private");
+            File.WriteAllText(temporaryPrivatePath + ".pub", OpenSsh);
+            return new ProcessResult
+            {
+                ExecutablePath = "ssh-keygen.exe",
+                ExitCode = 1,
+                StandardError = "simulated failure"
+            };
+        });
+        var service = CreateService(runner);
+
+        var result = await service.GenerateAsync(identity, overwrite: true);
+
+        Assert.False(result.Success);
+        Assert.Equal("old private", await File.ReadAllTextAsync(identity.PrivateKeyPath));
+        Assert.Equal("old public", await File.ReadAllTextAsync(identity.PublicKeyPath));
+        Assert.Empty(GenerationTemporaryFiles(directory.Path));
+        Assert.DoesNotContain(Directory.EnumerateFiles(directory.Path), path => path.EndsWith(".bak", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task GenerateSuccessWithoutPublicOutputDoesNotReplaceExistingKeys()
+    {
+        using var directory = new TemporaryDirectory();
+        var identity = CreateIdentity(directory.Path);
+        await File.WriteAllTextAsync(identity.PrivateKeyPath, "old private");
+        await File.WriteAllTextAsync(identity.PublicKeyPath, "old public");
+        var runner = new StubProcessRunner(request =>
+        {
+            File.WriteAllText(GeneratedPrivatePath(request), "new private");
+            return Success();
+        });
+        var service = CreateService(runner);
+
+        var result = await service.GenerateAsync(identity, overwrite: true);
+
+        Assert.False(result.Success);
+        Assert.Contains("complete key pair", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("old private", await File.ReadAllTextAsync(identity.PrivateKeyPath));
+        Assert.Equal("old public", await File.ReadAllTextAsync(identity.PublicKeyPath));
+        Assert.Empty(GenerationTemporaryFiles(directory.Path));
+    }
+
+    [Fact]
+    public async Task GenerateOverwriteValidatesTemporaryPairThenBacksUpAndReplacesTargets()
+    {
+        using var directory = new TemporaryDirectory();
+        var identity = CreateIdentity(directory.Path);
+        await File.WriteAllTextAsync(identity.PrivateKeyPath, "old private");
+        await File.WriteAllTextAsync(identity.PublicKeyPath, "old public");
+        var runner = new StubProcessRunner(request =>
+        {
+            var temporaryPrivatePath = GeneratedPrivatePath(request);
+            File.WriteAllText(temporaryPrivatePath, "new private");
+            File.WriteAllText(temporaryPrivatePath + ".pub", OpenSsh);
+            return Success();
+        });
+        var service = CreateService(runner);
+
+        var result = await service.GenerateAsync(identity, overwrite: true);
+
+        Assert.True(result.Success);
+        var value = Assert.IsType<SshKeyGenerationResult>(result.Value);
+        Assert.Equal("new private", await File.ReadAllTextAsync(identity.PrivateKeyPath));
+        Assert.Equal(OpenSsh, await File.ReadAllTextAsync(identity.PublicKeyPath));
+        Assert.Equal(OpenSsh, value.PublicKeyText);
+        Assert.Equal(2, value.BackupFiles.Count);
+        Assert.Contains(value.BackupFiles, path => File.ReadAllText(path) == "old private");
+        Assert.Contains(value.BackupFiles, path => File.ReadAllText(path) == "old public");
+        Assert.NotEqual(identity.PrivateKeyPath, GeneratedPrivatePath(Assert.Single(runner.Requests)));
+        Assert.Empty(GenerationTemporaryFiles(directory.Path));
+    }
+
+    [Fact]
+    public async Task GenerateDoesNotOverwriteTargetsCreatedAfterInitialExistenceCheck()
+    {
+        using var directory = new TemporaryDirectory();
+        var identity = CreateIdentity(directory.Path);
+        var runner = new StubProcessRunner(request =>
+        {
+            var temporaryPrivatePath = GeneratedPrivatePath(request);
+            File.WriteAllText(temporaryPrivatePath, "generated private");
+            File.WriteAllText(temporaryPrivatePath + ".pub", OpenSsh);
+            File.WriteAllText(identity.PrivateKeyPath, "concurrent private");
+            File.WriteAllText(identity.PublicKeyPath, "concurrent public");
+            return Success();
+        });
+        var service = CreateService(runner);
+
+        var result = await service.GenerateAsync(identity, overwrite: false);
+
+        Assert.False(result.Success);
+        Assert.Equal("concurrent private", await File.ReadAllTextAsync(identity.PrivateKeyPath));
+        Assert.Equal("concurrent public", await File.ReadAllTextAsync(identity.PublicKeyPath));
+        Assert.Empty(GenerationTemporaryFiles(directory.Path));
+    }
+
+    [Fact]
     public async Task ConvertsRfc4716ToSeparateOpenSshFile()
     {
         using var directory = new TemporaryDirectory();
@@ -316,4 +423,14 @@ public sealed class SshKeyServiceTests
             ExitCode = 0,
             StandardOutput = stdout
         };
+
+    private static string GeneratedPrivatePath(ProcessRequest request)
+    {
+        var index = request.Arguments.ToList().IndexOf("-f");
+        Assert.True(index >= 0 && index + 1 < request.Arguments.Count);
+        return request.Arguments[index + 1];
+    }
+
+    private static string[] GenerationTemporaryFiles(string directory)
+        => Directory.GetFiles(directory, "*.gitkeyrouter.*.tmp*");
 }
