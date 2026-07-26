@@ -178,6 +178,48 @@ public sealed partial class SshConfigService
             updated);
     }
 
+    public IReadOnlyList<string> FindOrphanManagedBlockAliases(
+        string original,
+        IEnumerable<GitIdentity> identities)
+    {
+        var configuredAliases = identities
+            .Select(identity => identity.HostAlias)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return ParseManagedBlocks(original)
+            .Where(block => !configuredAliases.Contains(block.HostAlias))
+            .Select(block => block.HostAlias)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(alias => alias, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public ChangePreview PreviewSynchronizeAllStrict(string original, AppConfig config)
+    {
+        var configuredAliases = config.Identities
+            .Select(identity => identity.HostAlias)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var updated = original;
+        foreach (var block in ParseManagedBlocks(original)
+                     .Where(block => !configuredAliases.Contains(block.HostAlias))
+                     .OrderByDescending(block => block.StartIndex))
+        {
+            updated = updated.Remove(block.StartIndex, block.Length);
+        }
+
+        updated = CollapseExcessBlankLines(updated, DetectNewline(original));
+        foreach (var identity in config.Identities.OrderBy(item => item.HostAlias, StringComparer.OrdinalIgnoreCase))
+        {
+            var service = config.FindService(identity.ServiceInstanceId)
+                ?? throw new InvalidOperationException($"Git service '{identity.ServiceInstanceId}' was not found.");
+            updated = PreviewUpsert(updated, service, identity).UpdatedText;
+        }
+
+        return CreatePreview(
+            "Strictly synchronize GitKeyRouter SSH managed blocks",
+            original,
+            updated);
+    }
+
     public ChangePreview CreatePreview(string description, string original, string updated)
     {
         var fileExists = _fileSystem.FileExists(_paths.SshConfigPath);

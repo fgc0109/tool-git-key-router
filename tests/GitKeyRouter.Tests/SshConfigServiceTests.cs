@@ -87,6 +87,58 @@ public sealed class SshConfigServiceTests
     }
 
     [Fact]
+    public void SynchronizeAll_PreservesOrphanManagedBlocks()
+    {
+        var service = CreateService();
+        var configured = Identity("github-active", @"C:\active");
+        var orphan = service.PreviewUpsert(string.Empty, Identity("github-orphan", @"C:\orphan")).UpdatedText;
+
+        var preview = service.PreviewSynchronizeAll(orphan, [configured]);
+
+        Assert.Contains("github-orphan", preview.UpdatedText);
+        Assert.Contains("github-active", preview.UpdatedText);
+    }
+
+    [Fact]
+    public void StrictSynchronize_RemovesOnlyCompleteOrphanManagedBlocks()
+    {
+        var service = CreateService();
+        var active = Identity("github-active", @"D:\new-active");
+        var activeBlock = service.PreviewUpsert(string.Empty, Identity("github-active", @"C:\old-active")).UpdatedText;
+        var orphanBlock = service.PreviewUpsert(string.Empty, Identity("github-orphan", @"C:\orphan")).UpdatedText;
+        const string unmanaged = "# user comment\nHost internal\n    HostName internal.example\n";
+        const string incomplete = "# BEGIN GitKeyRouter managed block: incomplete\nHost incomplete\n";
+        var original = unmanaged + activeBlock + orphanBlock + incomplete;
+        var config = new AppConfig
+        {
+            Identities = [active]
+        };
+
+        var preview = service.PreviewSynchronizeAllStrict(original, config);
+
+        Assert.DoesNotContain("github-orphan", preview.UpdatedText);
+        Assert.Contains("D:/new-active", preview.UpdatedText);
+        Assert.DoesNotContain("C:/old-active", preview.UpdatedText);
+        Assert.Contains(unmanaged, preview.UpdatedText);
+        Assert.Contains(incomplete, preview.UpdatedText);
+        Assert.Contains("github-orphan", preview.DiffText);
+    }
+
+    [Fact]
+    public void FindOrphanManagedBlockAliases_ReturnsOnlyUnconfiguredCompleteBlocks()
+    {
+        var service = CreateService();
+        var active = Identity("github-active", @"C:\active");
+        var original = service.PreviewUpsert(string.Empty, active).UpdatedText
+            + service.PreviewUpsert(string.Empty, Identity("github-orphan", @"C:\orphan")).UpdatedText
+            + "# BEGIN GitKeyRouter managed block: incomplete\nHost incomplete\n";
+
+        var aliases = service.FindOrphanManagedBlockAliases(original, [active]);
+
+        Assert.Equal(["github-orphan"], aliases);
+    }
+
+    [Fact]
     public async Task Apply_WritesWhenPreviewSnapshotStillMatches()
     {
         using var temp = new TemporaryDirectory();

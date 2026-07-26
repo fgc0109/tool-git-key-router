@@ -37,6 +37,7 @@ public sealed class SshConfigControl : UserControl, IAsyncRefreshable
                 "This page manages the Host blocks marked as GitKeyRouter-managed in ~/.ssh/config.\r\n\r\n• Prefer Synchronize all identities instead of copying blocks manually.\r\n• Raw-text changes are reviewed and backed up before writing.\r\n• Do not modify the start and end markers of managed blocks.\r\n• Use Parsed result to find duplicate Hosts or malformed structure."));
         var toolbar = UiHelpers.CreateToolbar();
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("同步全部身份", "Synchronize all identities"), async (_, _) => await SynchronizeAllAsync()));
+        toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("严格同步受管区块", "Strictly synchronize managed blocks"), async (_, _) => await SynchronizeAllStrictAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("删除选中区块", "Delete selected block"), async (_, _) => await DeleteSelectedAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("编辑原始文本", "Edit raw text"), async (_, _) => await EditRawAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("恢复最近备份", "Restore latest backup"), async (_, _) => await RestoreLatestAsync()));
@@ -131,6 +132,49 @@ public sealed class SshConfigControl : UserControl, IAsyncRefreshable
         }
 
         var result = await _services.SshConfigService.ApplyAsync(preview, "Synchronize all SSH managed blocks");
+        if (!result.Success)
+        {
+            UiHelpers.ShowErrors(this, result);
+            return;
+        }
+
+        await RefreshAsync();
+    }
+
+    private async Task SynchronizeAllStrictAsync()
+    {
+        var config = await _services.ConfigStore.LoadAsync();
+        var orphanAliases = _services.SshConfigService.FindOrphanManagedBlockAliases(_raw, config.Identities);
+        var orphanText = orphanAliases.Count == 0
+            ? "没有发现孤儿受管区块。"
+            : "将删除以下孤儿受管区块：\r\n\r\n" + string.Join("\r\n", orphanAliases.Select(alias => $"• {alias}"));
+        var confirmation = MessageBox.Show(
+            this,
+            "严格同步会更新全部已配置身份，并删除不再对应身份的完整 GitKeyRouter managed block。\r\n"
+            + "普通 Host、注释和不完整标记内容不会被删除。\r\n\r\n"
+            + orphanText
+            + "\r\n\r\n是否继续生成并检查 diff？",
+            "严格同步 SSH managed blocks",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+        if (confirmation != DialogResult.Yes)
+        {
+            return;
+        }
+
+        var preview = _services.SshConfigService.PreviewSynchronizeAllStrict(_raw, config);
+        using var diff = new DiffPreviewForm(
+            "严格同步 SSH managed blocks",
+            preview.DiffText,
+            "确认严格同步");
+        if (diff.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        var result = await _services.SshConfigService.ApplyAsync(
+            preview,
+            "Strictly synchronize SSH managed blocks");
         if (!result.Success)
         {
             UiHelpers.ShowErrors(this, result);
