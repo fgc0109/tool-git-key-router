@@ -136,6 +136,8 @@ id_ed25519_account.pem.pub         # PEM / PKCS8
 
 If the target format file already exists, replacement is refused by default. When the user explicitly allows replacement, a `.gitkeyrouter.<timestamp>.bak` backup is created first. Backup and temporary conversion files are not shown in the public-key variant list.
 
+Renaming key files updates every identity that shares those files and each corresponding SSH managed block. Every identity keeps the `HostName`, SSH port, and SSH user of its own Git service. If that service configuration is missing, preview fails instead of silently rewriting the block as GitHub.
+
 The application never displays private-key contents. When an OpenSSH or PEM private key is selected, GitKeyRouter only calls `ssh-keygen -y` to derive a new `.openssh.pub` file. PuTTY PPK files must first be converted with PuTTYgen.
 
 ### 4. Add the public key to a Git service

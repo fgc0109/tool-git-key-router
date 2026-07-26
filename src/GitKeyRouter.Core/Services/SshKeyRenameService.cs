@@ -138,7 +138,15 @@ public sealed class SshKeyRenameService
         var affectedIds = affectedIdentities.Select(item => item.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var updatedIdentity in previewIdentities.Where(item => affectedIds.Contains(item.Id)))
         {
-            updatedSsh = _sshConfigService.PreviewUpsert(updatedSsh, updatedIdentity).UpdatedText;
+            var service = config.FindService(updatedIdentity.ServiceInstanceId);
+            if (service is null)
+            {
+                return OperationResult<SshKeyRenamePlan>.Fail(
+                    "An affected identity references a Git service that no longer exists.",
+                    $"Identity '{updatedIdentity.DisplayName}' references service '{updatedIdentity.ServiceInstanceId}'.");
+            }
+
+            updatedSsh = _sshConfigService.PreviewUpsert(updatedSsh, service, updatedIdentity).UpdatedText;
         }
 
         return OperationResult<SshKeyRenamePlan>.Ok(new SshKeyRenamePlan
@@ -226,7 +234,10 @@ public sealed class SshKeyRenameService
             var affectedIds = currentPlan.AffectedIdentityIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var identity in config.Identities.Where(item => affectedIds.Contains(item.Id)))
             {
-                updatedSsh = _sshConfigService.PreviewUpsert(updatedSsh, identity).UpdatedText;
+                var service = config.FindService(identity.ServiceInstanceId)
+                    ?? throw new InvalidOperationException(
+                        $"Identity '{identity.DisplayName}' references missing Git service '{identity.ServiceInstanceId}'.");
+                updatedSsh = _sshConfigService.PreviewUpsert(updatedSsh, service, identity).UpdatedText;
             }
 
             var sshPreview = _sshConfigService.CreatePreview(

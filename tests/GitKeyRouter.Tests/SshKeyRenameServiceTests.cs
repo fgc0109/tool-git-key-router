@@ -118,6 +118,120 @@ public sealed class SshKeyRenameServiceTests
         Assert.Equal(0, backupService.SnapshotCount);
     }
 
+    [Fact]
+    public async Task PreservesCustomServiceHostPortAndUserInPreviewAndAppliedSshConfig()
+    {
+        using var directory = new TemporaryDirectory();
+        var paths = new TestAppPaths(directory.Path);
+        Directory.CreateDirectory(paths.SshDirectory);
+        var oldPrivatePath = Path.Combine(paths.SshDirectory, "id_ed25519_gitea");
+        var oldPublicPath = oldPrivatePath + ".pub";
+        await File.WriteAllTextAsync(oldPrivatePath, "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret");
+        await File.WriteAllTextAsync(oldPublicPath, OpenSsh);
+
+        var gitea = new GitServiceInstance
+        {
+            Id = "gitea-cloud",
+            DisplayName = "Gitea Cloud",
+            ProviderKind = GitProviderKind.Gitea,
+            HostName = "git.policoil.top",
+            SshPort = 2222,
+            SshUser = "forge",
+            WebBaseUrl = "https://git.policoil.top"
+        };
+        var identity = Identity("one", "Gitea Account", "gitea-cloud-one", oldPrivatePath, oldPublicPath);
+        identity.ServiceInstanceId = gitea.Id;
+        var configStore = new InMemoryAppConfigStore
+        {
+            Config = new AppConfig
+            {
+                GitServices = [GitServiceInstance.CreateGitHubCom(), gitea],
+                Identities = [identity]
+            }
+        };
+        var fileSystem = new PhysicalFileSystem();
+        var backupService = new NoOpBackupService();
+        var sshConfigService = new SshConfigService(fileSystem, paths, backupService);
+        var initialSsh = sshConfigService.PreviewUpsert(string.Empty, gitea, identity).UpdatedText;
+        await File.WriteAllTextAsync(paths.SshConfigPath, initialSsh);
+        var clock = new TestClock();
+        var keyService = new SshKeyService(
+            fileSystem,
+            new StubProcessRunner(_ => new ProcessResult { ExecutablePath = "ssh-keygen.exe", ExitCode = 0 }),
+            new FixedToolchainService("git.exe", "ssh-keygen.exe"),
+            clock);
+        var service = new SshKeyRenameService(
+            fileSystem,
+            configStore,
+            backupService,
+            sshConfigService,
+            keyService,
+            clock);
+
+        var planResult = await service.BuildPlanAsync(identity.Id, "id_ed25519_gitea_renamed");
+
+        Assert.True(planResult.Success);
+        var plan = Assert.IsType<SshKeyRenamePlan>(planResult.Value);
+        Assert.Contains("id_ed25519_gitea_renamed", plan.SshConfigDiff, StringComparison.Ordinal);
+        Assert.DoesNotContain("HostName github.com", plan.SshConfigDiff, StringComparison.Ordinal);
+
+        var result = await service.ApplyAsync(plan);
+
+        Assert.True(result.Success);
+        var updatedSsh = await File.ReadAllTextAsync(paths.SshConfigPath);
+        Assert.Contains("HostName git.policoil.top", updatedSsh, StringComparison.Ordinal);
+        Assert.Contains("Port 2222", updatedSsh, StringComparison.Ordinal);
+        Assert.Contains("User forge", updatedSsh, StringComparison.Ordinal);
+        Assert.DoesNotContain("HostName github.com", updatedSsh, StringComparison.Ordinal);
+        Assert.Contains("id_ed25519_gitea_renamed", updatedSsh, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RejectsRenameWhenAnAffectedIdentityReferencesMissingService()
+    {
+        using var directory = new TemporaryDirectory();
+        var paths = new TestAppPaths(directory.Path);
+        Directory.CreateDirectory(paths.SshDirectory);
+        var privatePath = Path.Combine(paths.SshDirectory, "id_ed25519_missing_service");
+        var publicPath = privatePath + ".pub";
+        await File.WriteAllTextAsync(privatePath, "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret");
+        await File.WriteAllTextAsync(publicPath, OpenSsh);
+        var identity = Identity("one", "Missing Service", "missing-one", privatePath, publicPath);
+        identity.ServiceInstanceId = "missing-service";
+        var configStore = new InMemoryAppConfigStore
+        {
+            Config = new AppConfig
+            {
+                GitServices = [GitServiceInstance.CreateGitHubCom()],
+                Identities = [identity]
+            }
+        };
+        var fileSystem = new PhysicalFileSystem();
+        var backupService = new NoOpBackupService();
+        var sshConfigService = new SshConfigService(fileSystem, paths, backupService);
+        var clock = new TestClock();
+        var keyService = new SshKeyService(
+            fileSystem,
+            new StubProcessRunner(_ => new ProcessResult { ExecutablePath = "ssh-keygen.exe", ExitCode = 0 }),
+            new FixedToolchainService("git.exe", "ssh-keygen.exe"),
+            clock);
+        var service = new SshKeyRenameService(
+            fileSystem,
+            configStore,
+            backupService,
+            sshConfigService,
+            keyService,
+            clock);
+
+        var result = await service.BuildPlanAsync(identity.Id, "id_ed25519_renamed");
+
+        Assert.False(result.Success);
+        Assert.Contains("no longer exists", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(privatePath));
+        Assert.True(File.Exists(publicPath));
+        Assert.Equal(0, backupService.SnapshotCount);
+    }
+
     private static GitIdentity Identity(
         string id,
         string displayName,

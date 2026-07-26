@@ -136,6 +136,8 @@ id_ed25519_account.pem.pub         # PEM / PKCS8
 
 如果目标格式文件已存在，默认拒绝覆盖；用户明确允许覆盖时，会先创建 `.gitkeyrouter.<timestamp>.bak` 备份。备份和临时转换文件不会显示在公钥变体列表中。
 
+重命名密钥文件时，程序会同时更新所有共享该文件的身份和对应的 SSH managed block。每个身份继续使用它所属 Git 服务的 `HostName`、SSH 端口和 SSH 用户；如果服务配置已缺失，预览会直接失败，不会把配置误写成 GitHub。
+
 程序不显示私钥正文。选择已配置的 OpenSSH/PEM 私钥时，只会调用 `ssh-keygen -y` 派生新的 `.openssh.pub` 文件。PuTTY PPK 需要先用 PuTTYgen 转换。
 
 ### 4. 添加公钥到 Git 服务
