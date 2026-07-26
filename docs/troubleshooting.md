@@ -67,7 +67,9 @@ Conservative synchronization retains orphan managed blocks. Use strict synchroni
 
 ## A backup is missing from the list
 
-The backup list hides `.pending-*`, directories without a manifest, and manifests that cannot be parsed. It does not verify every listed backup's data files and SHA-256 in advance, so a damaged but parseable snapshot can still appear and then fail when opened or restored. The current UI has no classified health inventory or safe cleanup action; inspect the backup root carefully and avoid deleting a directory while another operation is active.
+The backup page now lists every direct child of the backup root and shows complete, pending, damaged, unsupported, or unknown status. Only complete entries can be restored. Review the health reason and file-integrity details for an entry that previously appeared missing.
+
+Cleanup requires a generated preview and confirmation. An active or one-hour grace-period pending directory, complete snapshot, reparse point, path outside the backup root, or target changed after preview is deliberately rejected. Resolve deletion permissions and refresh if cleanup reports a failure; do not bypass the boundary by manually targeting a linked directory.
 
 ## Restoring a backup reports an unsupported schema
 

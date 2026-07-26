@@ -12,7 +12,7 @@ public sealed class BackupControl : UserControl, IAsyncRefreshable
     private readonly ApplicationServices _services;
     private readonly Action<string> _status;
     private readonly DataGridView _grid = UiHelpers.CreateGrid();
-    private IReadOnlyList<BackupManifest> _backups = [];
+    private IReadOnlyList<BackupInventoryItem> _inventory = [];
 
     public BackupControl(ApplicationServices services, Action<string> status)
     {
@@ -20,16 +20,17 @@ public sealed class BackupControl : UserControl, IAsyncRefreshable
         _status = status;
         var header = UiHelpers.CreatePageHeader(
             AppLocalization.T("备份与恢复", "Backup and Restore"),
-            AppLocalization.T("创建配置快照，并按需恢复 SSH、Git 或程序配置", "Create configuration snapshots and restore SSH, Git, or application settings independently"),
+            AppLocalization.T("检查备份健康状态，并按需恢复或安全清理", "Inspect backup health, restore valid snapshots, and safely clean invalid entries"),
             AppLocalization.T(
-                "GitKeyRouter 在重要写入前会自动创建快照，也可以手动创建。\r\n\r\n• 先根据时间和原因选择备份。\r\n• 使用“查看内容”确认快照包含的配置。\r\n• SSH Config、Git rewrite 和程序配置可以分别恢复。\r\n• 恢复会覆盖对应范围，请先确认当前状态。",
-                "GitKeyRouter creates snapshots before important writes, and you can also create them manually.\r\n\r\n• Select a backup by timestamp and reason.\r\n• Use View contents to confirm what the snapshot contains.\r\n• SSH Config, Git rewrites, and application configuration can be restored independently.\r\n• Restore operations replace the selected scope, so review the current state first."));
+                "GitKeyRouter 在重要写入前会自动创建快照，也可以手动创建。\r\n\r\n• 列表会检查 manifest 和文件完整性并显示健康状态。\r\n• 只有完整备份可以查看内容或恢复。\r\n• 异常目录必须先预览，再确认清理。\r\n• 活动或近期 pending、完整备份和重解析点不会被清理。",
+                "GitKeyRouter creates snapshots before important writes, and you can also create them manually.\r\n\r\n• The list verifies manifests and recorded file integrity.\r\n• Only complete snapshots can be viewed or restored.\r\n• Invalid directories require a cleanup preview and confirmation.\r\n• Active/recent pending directories, complete snapshots, and reparse points are protected."));
         var toolbar = UiHelpers.CreateToolbar();
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("立即创建快照", "Create snapshot now"), async (_, _) => await CreateSnapshotAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("查看内容", "View contents"), async (_, _) => await ViewAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("恢复 SSH Config", "Restore SSH Config"), async (_, _) => await RestoreSshAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("恢复 Git rewrite", "Restore Git rewrites"), async (_, _) => await RestoreGitAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("恢复程序配置", "Restore application config"), async (_, _) => await RestoreAppAsync()));
+        toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("清理选中异常项", "Clean selected invalid item"), async (_, _) => await CleanSelectedAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("打开备份目录", "Open backup folder"), (_, _) => OpenBackupDirectory()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("刷新", "Refresh"), async (_, _) => await RefreshAsync()));
         Controls.Add(_grid);
@@ -39,25 +40,23 @@ public sealed class BackupControl : UserControl, IAsyncRefreshable
 
     public async Task RefreshAsync()
     {
-        _backups = await _services.BackupService.ListAsync();
-        _grid.DataSource = _backups.Select((item, index) => new BackupRow
+        _inventory = await _services.BackupService.InventoryAsync();
+        _grid.DataSource = _inventory.Select((item, index) => new BackupRow
         {
             Index = index,
-            时间 = item.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
-            原因 = item.Reason,
-            SSH配置 = item.SshConfigExisted ? "有" : "原文件不存在",
-            程序配置 = item.AppConfigExisted
-                ? $"有（Schema {item.AppConfigSchemaVersion?.ToString() ?? "未知"}）"
-                : "原文件不存在",
-            Git规则数 = item.GitRewriteCount,
-            Git快照 = string.IsNullOrWhiteSpace(item.GitRewriteCaptureError) ? "正常" : "读取失败"
+            时间 = (item.Manifest?.CreatedAt ?? item.LastWriteTimeUtc).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+            状态 = FormatStatus(item.Status),
+            原因 = item.Manifest?.Reason ?? item.Reason,
+            健康说明 = item.Reason,
+            文件与完整性 = item.Details.Count == 0 ? "<无>" : string.Join("; ", item.Details),
+            可清理 = item.CanClean ? "是" : "否"
         }).ToList();
         if (_grid.Columns[nameof(BackupRow.Index)] is { } indexColumn)
         {
             indexColumn.Visible = false;
         }
 
-        _status($"已加载 {_backups.Count} 个备份");
+        _status($"已扫描 {_inventory.Count} 个备份目录，其中 {_inventory.Count(item => item.Status == BackupHealthStatus.Complete)} 个完整");
     }
 
     private async Task CreateSnapshotAsync()
@@ -69,13 +68,25 @@ public sealed class BackupControl : UserControl, IAsyncRefreshable
 
     private async Task ViewAsync()
     {
-        var backup = SelectedBackup();
-        if (backup is null)
+        var item = SelectedInventoryItem();
+        if (item is null)
         {
             return;
         }
 
-        var snapshot = await _services.BackupService.ReadAsync(backup.BackupDirectory);
+        if (item.Status != BackupHealthStatus.Complete || item.Manifest is null)
+        {
+            var healthText = $"Directory: {item.BackupDirectory}{Environment.NewLine}"
+                + $"Status: {item.Status}{Environment.NewLine}"
+                + $"Reason: {item.Reason}{Environment.NewLine}"
+                + $"Can clean: {item.CanClean}{Environment.NewLine}{Environment.NewLine}"
+                + string.Join(Environment.NewLine, item.Details);
+            using var healthForm = new TextViewForm("备份健康详情", healthText);
+            healthForm.ShowDialog(this);
+            return;
+        }
+
+        var snapshot = await _services.BackupService.ReadAsync(item.BackupDirectory);
         var builder = new StringBuilder();
         builder.AppendLine("Manifest");
         builder.AppendLine(JsonSerializer.Serialize(snapshot.Manifest, new JsonSerializerOptions { WriteIndented = true }));
@@ -194,16 +205,86 @@ public sealed class BackupControl : UserControl, IAsyncRefreshable
         _status(result.Message);
     }
 
+    private async Task CleanSelectedAsync()
+    {
+        var item = SelectedInventoryItem();
+        if (item is null)
+        {
+            return;
+        }
+
+        var plan = await _services.BackupService.PreviewCleanupAsync([item.BackupDirectory]);
+        if (!plan.HasTargets)
+        {
+            MessageBox.Show(
+                this,
+                string.Join(Environment.NewLine, plan.Rejected.DefaultIfEmpty("当前项目不可安全清理。")),
+                "未生成清理计划",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        var target = plan.Targets[0];
+        var preview = $"状态：{target.Status}{Environment.NewLine}"
+            + $"原因：{target.Reason}{Environment.NewLine}"
+            + $"目录：{target.BackupDirectory}{Environment.NewLine}{Environment.NewLine}"
+            + "确认后将永久删除这个异常备份目录。";
+        if (MessageBox.Show(this, preview, "确认清理异常备份", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        var result = await _services.BackupService.CleanAsync(plan);
+        if (!result.Success)
+        {
+            UiHelpers.ShowErrors(this, result);
+        }
+        else
+        {
+            _status(result.Message);
+        }
+
+        await RefreshAsync();
+    }
+
     private BackupManifest? SelectedBackup()
     {
-        if (_grid.CurrentRow?.DataBoundItem is not BackupRow row || row.Index < 0 || row.Index >= _backups.Count)
+        var item = SelectedInventoryItem();
+        if (item is null)
         {
-            MessageBox.Show(this, "请先选择一个备份。", "GitKeyRouter", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return null;
         }
 
-        return _backups[row.Index];
+        if (item.Status != BackupHealthStatus.Complete || item.Manifest is null)
+        {
+            MessageBox.Show(this, "只能查看或恢复通过完整性检查的完整备份。", "GitKeyRouter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return null;
+        }
+
+        return item.Manifest;
     }
+
+    private BackupInventoryItem? SelectedInventoryItem()
+    {
+        if (_grid.CurrentRow?.DataBoundItem is not BackupRow row || row.Index < 0 || row.Index >= _inventory.Count)
+        {
+            MessageBox.Show(this, "请先选择一个备份目录。", "GitKeyRouter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return null;
+        }
+
+        return _inventory[row.Index];
+    }
+
+    private static string FormatStatus(BackupHealthStatus status)
+        => status switch
+        {
+            BackupHealthStatus.Complete => AppLocalization.T("完整", "Complete"),
+            BackupHealthStatus.Pending => AppLocalization.T("未完成", "Pending"),
+            BackupHealthStatus.Damaged => AppLocalization.T("损坏", "Damaged"),
+            BackupHealthStatus.Unsupported => AppLocalization.T("版本不支持", "Unsupported"),
+            _ => AppLocalization.T("未知", "Unknown")
+        };
 
     private void OpenBackupDirectory()
     {
@@ -217,10 +298,10 @@ public sealed class BackupControl : UserControl, IAsyncRefreshable
     {
         public int Index { get; init; }
         public string 时间 { get; init; } = string.Empty;
+        public string 状态 { get; init; } = string.Empty;
         public string 原因 { get; init; } = string.Empty;
-        public string SSH配置 { get; init; } = string.Empty;
-        public string 程序配置 { get; init; } = string.Empty;
-        public int Git规则数 { get; init; }
-        public string Git快照 { get; init; } = string.Empty;
+        public string 健康说明 { get; init; } = string.Empty;
+        public string 文件与完整性 { get; init; } = string.Empty;
+        public string 可清理 { get; init; } = string.Empty;
     }
 }

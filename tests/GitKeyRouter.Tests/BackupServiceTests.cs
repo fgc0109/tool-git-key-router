@@ -79,6 +79,152 @@ public sealed class BackupServiceTests
     }
 
     [Fact]
+    public async Task Inventory_ClassifiesCompletePendingDamagedUnsupportedAndUnknownDirectories()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var clock = new TestClock();
+        var service = new BackupService(
+            paths,
+            new PhysicalFileSystem(),
+            new FakeGitUrlRewriteStore(),
+            clock);
+        var complete = await service.CreateSnapshotAsync("complete");
+        var pending = Path.Combine(paths.BackupRootDirectory, ".pending-abandoned");
+        var damaged = Path.Combine(paths.BackupRootDirectory, "damaged");
+        var unsupported = Path.Combine(paths.BackupRootDirectory, "unsupported");
+        var unknown = Path.Combine(paths.BackupRootDirectory, "unknown");
+        Directory.CreateDirectory(pending);
+        Directory.SetLastWriteTimeUtc(pending, clock.UtcNow.AddHours(-2).UtcDateTime);
+        Directory.CreateDirectory(damaged);
+        await File.WriteAllTextAsync(Path.Combine(damaged, "manifest.json"), "{not-json");
+        Directory.CreateDirectory(unsupported);
+        await File.WriteAllTextAsync(
+            Path.Combine(unsupported, "manifest.json"),
+            "{\"SchemaVersion\":99,\"Reason\":\"future\"}");
+        Directory.CreateDirectory(unknown);
+
+        var inventory = await service.InventoryAsync();
+
+        Assert.Equal(BackupHealthStatus.Complete, Find(inventory, complete.BackupDirectory).Status);
+        var pendingItem = Find(inventory, pending);
+        Assert.Equal(BackupHealthStatus.Pending, pendingItem.Status);
+        Assert.True(pendingItem.CanClean);
+        Assert.Equal(BackupHealthStatus.Damaged, Find(inventory, damaged).Status);
+        Assert.Equal(BackupHealthStatus.Unsupported, Find(inventory, unsupported).Status);
+        Assert.Equal(BackupHealthStatus.Unknown, Find(inventory, unknown).Status);
+    }
+
+    [Fact]
+    public async Task Cleanup_DeletesOnlyPreviewedInvalidDirectChildren()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var service = new BackupService(
+            paths,
+            new PhysicalFileSystem(),
+            new FakeGitUrlRewriteStore(),
+            new TestClock());
+        var complete = await service.CreateSnapshotAsync("complete");
+        var invalid = Path.Combine(paths.BackupRootDirectory, "missing-manifest");
+        var outside = Path.Combine(temp.Path, "outside");
+        Directory.CreateDirectory(invalid);
+        Directory.CreateDirectory(outside);
+
+        var plan = await service.PreviewCleanupAsync([invalid, complete.BackupDirectory, outside]);
+
+        var target = Assert.Single(plan.Targets);
+        Assert.Equal(Path.GetFullPath(invalid), target.BackupDirectory);
+        Assert.Equal(2, plan.Rejected.Count);
+        var result = await service.CleanAsync(plan);
+        Assert.True(result.Success);
+        Assert.False(Directory.Exists(invalid));
+        Assert.True(Directory.Exists(complete.BackupDirectory));
+        Assert.True(Directory.Exists(outside));
+    }
+
+    [Fact]
+    public async Task Cleanup_ProtectsRecentPendingAndReparsePointDirectories()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var fileSystem = new FaultingFileSystem();
+        var service = new BackupService(paths, fileSystem, new FakeGitUrlRewriteStore(), new TestClock());
+        Directory.CreateDirectory(paths.BackupRootDirectory);
+        var pending = Path.Combine(paths.BackupRootDirectory, ".pending-recent");
+        var reparse = Path.Combine(paths.BackupRootDirectory, "reparse");
+        Directory.CreateDirectory(pending);
+        Directory.CreateDirectory(reparse);
+        fileSystem.ReparseDirectories.Add(Path.GetFullPath(reparse));
+
+        var plan = await service.PreviewCleanupAsync([pending, reparse]);
+
+        Assert.Empty(plan.Targets);
+        Assert.Equal(2, plan.Rejected.Count);
+        Assert.True(Directory.Exists(pending));
+        Assert.True(Directory.Exists(reparse));
+    }
+
+    [Fact]
+    public async Task Cleanup_RejectsChildrenWhenBackupRootIsAReparsePoint()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var fileSystem = new FaultingFileSystem();
+        var service = new BackupService(paths, fileSystem, new FakeGitUrlRewriteStore(), new TestClock());
+        var invalid = Path.Combine(paths.BackupRootDirectory, "invalid");
+        Directory.CreateDirectory(invalid);
+        fileSystem.ReparseDirectories.Add(Path.GetFullPath(paths.BackupRootDirectory));
+
+        var plan = await service.PreviewCleanupAsync([invalid]);
+
+        Assert.Empty(plan.Targets);
+        Assert.Single(plan.Rejected);
+        Assert.True(Directory.Exists(invalid));
+    }
+
+    [Fact]
+    public async Task Cleanup_ReportsDeletionFailureAndKeepsDirectory()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var fileSystem = new FaultingFileSystem();
+        var service = new BackupService(paths, fileSystem, new FakeGitUrlRewriteStore(), new TestClock());
+        var invalid = Path.Combine(paths.BackupRootDirectory, "invalid");
+        Directory.CreateDirectory(invalid);
+        var plan = await service.PreviewCleanupAsync([invalid]);
+        fileSystem.FailDirectoryDelete = true;
+
+        var result = await service.CleanAsync(plan);
+
+        Assert.False(result.Success);
+        Assert.Contains("Simulated directory deletion failure", string.Join(' ', result.Errors), StringComparison.Ordinal);
+        Assert.True(Directory.Exists(invalid));
+    }
+
+    [Fact]
+    public async Task Cleanup_RejectsTargetChangedAfterPreview()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var service = new BackupService(
+            paths,
+            new PhysicalFileSystem(),
+            new FakeGitUrlRewriteStore(),
+            new TestClock());
+        var invalid = Path.Combine(paths.BackupRootDirectory, "invalid");
+        Directory.CreateDirectory(invalid);
+        var plan = await service.PreviewCleanupAsync([invalid]);
+        await File.WriteAllTextAsync(Path.Combine(invalid, "manifest.json"), "{\"SchemaVersion\":99}");
+
+        var result = await service.CleanAsync(plan);
+
+        Assert.False(result.Success);
+        Assert.Contains("changed after preview", string.Join(' ', result.Errors), StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(invalid));
+    }
+
+    [Fact]
     public async Task SnapshotAndRestore_PreservesAllThreeConfigurationTypes()
     {
         using var temp = new TemporaryDirectory();
@@ -214,6 +360,12 @@ public sealed class BackupServiceTests
         Assert.Equal([originalRule], git.Rules);
     }
 
+    private static BackupInventoryItem Find(
+        IEnumerable<BackupInventoryItem> inventory,
+        string directory)
+        => Assert.Single(inventory, item =>
+            string.Equals(item.BackupDirectory, Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase));
+
     private sealed class FaultingFileSystem : IFileSystem
     {
         private readonly PhysicalFileSystem _inner = new();
@@ -222,13 +374,32 @@ public sealed class BackupServiceTests
 
         public bool FailDirectoryMove { get; init; }
 
+        public bool FailDirectoryDelete { get; set; }
+
+        public HashSet<string> ReparseDirectories { get; } = new(StringComparer.OrdinalIgnoreCase);
+
         public bool FileExists(string path) => _inner.FileExists(path);
 
         public bool DirectoryExists(string path) => _inner.DirectoryExists(path);
 
+        public FileAttributes GetAttributes(string path)
+            => ReparseDirectories.Contains(Path.GetFullPath(path))
+                ? _inner.GetAttributes(path) | FileAttributes.ReparsePoint
+                : _inner.GetAttributes(path);
+
+        public DateTimeOffset GetLastWriteTimeUtc(string path) => _inner.GetLastWriteTimeUtc(path);
+
         public void CreateDirectory(string path) => _inner.CreateDirectory(path);
 
-        public void DeleteDirectory(string path, bool recursive) => _inner.DeleteDirectory(path, recursive);
+        public void DeleteDirectory(string path, bool recursive)
+        {
+            if (FailDirectoryDelete)
+            {
+                throw new IOException("Simulated directory deletion failure.");
+            }
+
+            _inner.DeleteDirectory(path, recursive);
+        }
 
         public void MoveDirectory(string sourcePath, string destinationPath)
         {

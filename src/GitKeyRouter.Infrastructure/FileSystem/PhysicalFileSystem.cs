@@ -9,6 +9,11 @@ public sealed class PhysicalFileSystem : IFileSystem
 
     public bool DirectoryExists(string path) => Directory.Exists(path);
 
+    public FileAttributes GetAttributes(string path) => File.GetAttributes(path);
+
+    public DateTimeOffset GetLastWriteTimeUtc(string path)
+        => new(Directory.GetLastWriteTimeUtc(path), TimeSpan.Zero);
+
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
 
     public void DeleteDirectory(string path, bool recursive)

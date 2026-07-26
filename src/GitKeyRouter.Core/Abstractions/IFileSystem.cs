@@ -6,6 +6,10 @@ public interface IFileSystem
 
     bool DirectoryExists(string path);
 
+    FileAttributes GetAttributes(string path);
+
+    DateTimeOffset GetLastWriteTimeUtc(string path);
+
     void CreateDirectory(string path);
 
     void DeleteDirectory(string path, bool recursive);

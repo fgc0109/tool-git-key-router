@@ -89,6 +89,19 @@ internal sealed class NoOpBackupService : IBackupService
     public Task<IReadOnlyList<BackupManifest>> ListAsync(CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<BackupManifest>>([]);
 
+    public Task<IReadOnlyList<BackupInventoryItem>> InventoryAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<BackupInventoryItem>>([]);
+
+    public Task<BackupCleanupPlan> PreviewCleanupAsync(
+        IEnumerable<string> backupDirectories,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(new BackupCleanupPlan());
+
+    public Task<OperationResult<IReadOnlyList<string>>> CleanAsync(
+        BackupCleanupPlan plan,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(OperationResult<IReadOnlyList<string>>.Ok([], "Nothing to clean."));
+
     public Task<BackupSnapshot> ReadAsync(string backupDirectory, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
 

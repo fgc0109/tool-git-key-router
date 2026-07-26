@@ -83,6 +83,8 @@ A service default identity derives a managed Service route with ID `service-defa
 
 General safety snapshots persist application config, SSH Config, and exact Git URL rewrite pairs. Snapshot directories are prepared under `.pending-*`, integrity-checked, and moved into view only when complete.
 
+The backup inventory classifies every direct child as complete, pending, damaged, unsupported, or unknown. Complete schema-2 snapshots pass manifest and file SHA-256 checks before being exposed for restore. Cleanup is a preview/apply operation constrained to invalid direct children; it re-scans before deletion and rejects complete snapshots, reparse points, active/recent pending directories, path escapes, and changed targets.
+
 Git Profile files and the global `include.path` sequence are not part of this general backup format; they use the dedicated persistent transaction journal described above.
 
 Application config, SSH Config, and Git URL rewrites are restored independently. Git rewrite restore performs exact Git configuration operations and never replaces the complete `.gitconfig` file.

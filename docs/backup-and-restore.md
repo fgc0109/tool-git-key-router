@@ -28,9 +28,17 @@ Failure, cancellation, integrity mismatch, or publication failure triggers best-
 
 ## Listing and integrity
 
-`ListAsync` skips `.pending-*`, directories without `manifest.json`, and manifests that cannot be deserialized. It does not call full file-integrity validation while building the list. A parseable manifest whose data files are missing or modified can therefore appear in the UI and will be rejected when `ReadAsync` or a restore action validates it.
+The inventory scans every direct child of the backup root and classifies it as:
 
-The current list is not a health inventory: some invalid directories are hidden, while other integrity failures are deferred until selection. The UI does not classify these states or provide a constrained cleanup action. Inspect the backup root manually if disk usage suggests abandoned directories, and do not delete an unknown directory while another GitKeyRouter operation may still be creating a snapshot. A classified inventory and safe cleanup workflow is planned for v0.4.12.
+- `Complete`: supported manifest and recorded file-integrity checks passed.
+- `Pending`: snapshot publication has not completed; active and one-hour grace-period entries are protected.
+- `Damaged`: manifest parsing, required-file, length, SHA-256, or payload validation failed.
+- `Unsupported`: the manifest schema is newer than this GitKeyRouter version.
+- `Unknown`: no usable manifest exists, or the directory is a reparse point or outside the accepted boundary.
+
+The UI shows the classification, reason, files, and integrity metadata. Only complete backups can be opened or restored.
+
+Cleanup always has a separate preview and confirmation. The service accepts only direct children of the configured backup root and re-scans the selected target immediately before deletion. Complete backups, active or recent pending directories, symbolic links/junctions/other reparse points, path escapes, and targets whose status or timestamp changed after preview are rejected. Partial deletion failures are reported and the remaining directory stays visible on refresh.
 
 ## Restore validation
 
