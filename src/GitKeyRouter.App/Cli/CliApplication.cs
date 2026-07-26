@@ -388,6 +388,15 @@ public sealed class CliApplication
         Console.WriteLine($"Arguments:  {string.Join(" | ", result.Arguments)}");
         Console.WriteLine($"Exit code:  {result.ExitCode?.ToString() ?? "<none>"}");
         Console.WriteLine($"Timed out:  {result.TimedOut}");
+        Console.WriteLine($"Cancelled:  {result.Cancelled}");
+        Console.WriteLine($"Kill failed: {result.KillFailed}");
+        Console.WriteLine($"stdout truncated: {result.StandardOutputTruncated}");
+        Console.WriteLine($"stderr truncated: {result.StandardErrorTruncated}");
+        if (!string.IsNullOrWhiteSpace(result.TerminationError))
+        {
+            Console.WriteLine($"Termination error: {result.TerminationError}");
+        }
+
         Console.WriteLine("stdout:");
         Console.WriteLine(result.StandardOutput);
         Console.WriteLine("stderr:");

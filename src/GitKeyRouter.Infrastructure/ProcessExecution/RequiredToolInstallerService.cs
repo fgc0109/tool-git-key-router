@@ -206,6 +206,16 @@ public sealed class RequiredToolInstallerService : IRequiredToolInstallerService
             errors.Add("The installer timed out.");
         }
 
+        if (process.Cancelled)
+        {
+            errors.Add("The installer was cancelled.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(process.TerminationError))
+        {
+            errors.Add(process.TerminationError);
+        }
+
         errors.Add($"Exit code: {process.ExitCode?.ToString() ?? "<none>"}");
         return OperationResult<RequiredToolInstallResult>.Fail(message, errors.ToArray());
     }

@@ -555,6 +555,14 @@ public static class UiHelpers
         builder.AppendLine($"Exit code: {result.ExitCode?.ToString() ?? "<none>"}");
         builder.AppendLine($"Timed out: {result.TimedOut}");
         builder.AppendLine($"Cancelled: {result.Cancelled}");
+        builder.AppendLine($"Kill failed: {result.KillFailed}");
+        if (!string.IsNullOrWhiteSpace(result.TerminationError))
+        {
+            builder.AppendLine($"Termination error: {result.TerminationError}");
+        }
+
+        builder.AppendLine($"stdout truncated: {result.StandardOutputTruncated}");
+        builder.AppendLine($"stderr truncated: {result.StandardErrorTruncated}");
         builder.AppendLine($"Duration: {result.Duration}");
         builder.AppendLine();
         builder.AppendLine("stdout:");

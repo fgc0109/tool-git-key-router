@@ -12,6 +12,10 @@ public sealed class ProcessResult
 
     public string StandardError { get; init; } = string.Empty;
 
+    public bool StandardOutputTruncated { get; init; }
+
+    public bool StandardErrorTruncated { get; init; }
+
     public bool TimedOut { get; init; }
 
     public bool Cancelled { get; init; }
@@ -20,7 +24,11 @@ public sealed class ProcessResult
 
     public Exception? StartException { get; init; }
 
+    public bool KillFailed { get; init; }
+
+    public string? TerminationError { get; init; }
+
     public bool Started => StartException is null;
 
-    public bool Succeeded => Started && !TimedOut && !Cancelled && ExitCode == 0;
+    public bool Succeeded => Started && !TimedOut && !Cancelled && !KillFailed && ExitCode == 0;
 }
