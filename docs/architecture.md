@@ -24,6 +24,12 @@ Process execution tests launch the repository-owned `GitKeyRouter.ProcessTestChi
 
 `SafeFileLogger` sends messages and exception text through a bounded redaction pipeline before writing. Generated non-backtracking regular expressions remove private-key blocks, credential URL user-info, Authorization Bearer values, common password/token/secret and ASKPASS assignments, and prefixed GitHub/GitLab tokens. After the multiline private-key pass, credential matching is line-scoped to keep long logs linear. Plain URLs, paths, SSH public keys/fingerprints, and unprefixed commit SHA values remain readable.
 
+## Test platform and dependency management
+
+Both test projects use the xUnit v3 executable test-project model (`OutputType=Exe`) and the xUnit VSTest adapter, preserving the existing `dotnet test` and TRX workflow. Package versions are declared once in the root `Directory.Packages.props`; individual project files contain version-free `PackageReference` entries, and checked-in lock files pin the resolved graph for normal and `win-x64` restores.
+
+xUnit v3 analyzer rule `xUnit1051` is temporarily suppressed in both test projects because existing operation-specific cancellation and timeout tests intentionally use dedicated tokens. The suppression is explicit technical debt for the planned analyzer cleanup in v0.4.17; all other compiler and analyzer warnings remain errors when `CI=true`.
+
 ## Application instance boundary
 
 GUI startup and confirmed write commands (`apply --yes`, `apply-profiles --yes`) share a per-Windows-user mutex. Read-only, preview, diagnostic, parsing, and connection-test CLI commands do not take the exclusive lock. Version and help commands return before application-service construction.

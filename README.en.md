@@ -510,6 +510,8 @@ Process operations are abstracted behind interfaces, and most tests use in-memor
 
 ProcessRunner output, timeout, cancellation, and process-tree tests use a repository-owned child executable and ready-file handshakes. They do not depend on `cmd.exe`, `ping`, or 100 ms scheduling guesses.
 
+Both test projects use the xUnit v3 executable test-project model while retaining the VSTest adapter and existing TRX output. `Directory.Packages.props` centrally owns the test SDK, xUnit, and adapter versions; project files no longer repeat package versions, and lock files continue to provide repeatable restores.
+
 Git integration tests set:
 
 ```text

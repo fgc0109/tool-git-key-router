@@ -516,6 +516,8 @@ artifacts\release\                                  # 带版本号的 ZIP 和 SH
 
 ProcessRunner 的输出、超时、取消和进程树测试使用仓库内专用子进程与 ready 文件握手，不依赖 `cmd.exe`、`ping` 或 100 ms 猜测时序。
 
+两个测试项目使用 xUnit v3 可执行测试项目，并通过 VSTest 适配器继续输出现有 TRX 结果。`Directory.Packages.props` 集中管理测试 SDK、xUnit 和适配器版本；项目文件不再分别声明包版本，锁文件仍用于可重复还原。
+
 Git 集成测试通过：
 
 ```text
