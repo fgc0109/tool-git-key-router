@@ -36,17 +36,17 @@ Ordinary configuration saves do not yet expose a repository-wide optimistic conc
 
 ## Git Profile transaction
 
-`GitProfileService.ApplyAsync` performs the following method-level transaction:
+`GitProfileService.ApplyAsync` performs the following persistent transaction:
 
 1. Verify `git.exe` and read the exact global `include.path` sequence.
 2. Reject a preview if the profile file set, existence state, or SHA-256 changed.
-3. Capture all affected profile files and `include.path` values in memory.
+3. Persist all affected profile files, original existence, content hashes, and the ordered `include.path` values in a `prepared` transaction journal.
 4. Generate every target file in a `.pending-*` staging directory and validate it with Git.
-5. Recheck the preview token, atomically write target files, remove stale profile files, and register the master include.
-6. Re-read the final files and global includes.
-7. On failure after mutation starts, restore the captured files and include sequence and verify the rollback.
+5. Recheck the preview token, persist and re-read the `applying` state, atomically write target files, remove stale profile files, and register the master include.
+6. Re-read the final files and global includes, persist `committed`, and remove the completed journal.
+7. On failure after mutation starts, restore the captured files and include sequence, verify the rollback, persist `rolled-back`, and remove the completed journal.
 
-The snapshot is not persisted. A process crash, power loss, or restart after live mutation starts can therefore bypass method-level rollback. A recoverable on-disk transaction journal remains planned work.
+The journals live under `%APPDATA%\GitKeyRouter\git-profile-transactions`. A startup that holds the exclusive writer lock recovers any validated `applying` journal before constructing the GUI or dispatching a confirmed write command. Recovery failure keeps the journal and blocks the new writer. `prepared`, `committed`, and `rolled-back` journals cannot represent an unhandled live mutation and are removed best-effort.
 
 ## SSH Config editing and synchronization
 
@@ -83,7 +83,7 @@ A service default identity derives a managed Service route with ID `service-defa
 
 General safety snapshots persist application config, SSH Config, and exact Git URL rewrite pairs. Snapshot directories are prepared under `.pending-*`, integrity-checked, and moved into view only when complete.
 
-Git Profile files and the global `include.path` sequence are not part of this general backup format; they currently rely on the method-level transaction described above.
+Git Profile files and the global `include.path` sequence are not part of this general backup format; they use the dedicated persistent transaction journal described above.
 
 Application config, SSH Config, and Git URL rewrites are restored independently. Git rewrite restore performs exact Git configuration operations and never replaces the complete `.gitconfig` file.
 

@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using GitKeyRouter.Core.Abstractions;
 using GitKeyRouter.Core.Models;
 using GitKeyRouter.Core.Validation;
@@ -8,6 +10,16 @@ namespace GitKeyRouter.Core.Services;
 public sealed class GitProfileService
 {
     private const string MasterFileName = "profiles.gitconfig";
+    private const string TransactionManifestFileName = "transaction.json";
+    private const string TransactionStatePrepared = "prepared";
+    private const string TransactionStateApplying = "applying";
+    private const string TransactionStateCommitted = "committed";
+    private const string TransactionStateRolledBack = "rolled-back";
+    private static readonly JsonSerializerOptions TransactionJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        WriteIndented = true
+    };
     private readonly IAppConfigStore _configStore;
     private readonly IBackupService _backupService;
     private readonly IFileSystem _fileSystem;
@@ -34,6 +46,98 @@ public sealed class GitProfileService
     public string ProfilesDirectory => Path.Combine(_paths.AppDataDirectory, "git-profiles");
 
     public string MasterConfigPath => Path.Combine(ProfilesDirectory, MasterFileName);
+
+    public string TransactionRootDirectory => Path.Combine(_paths.AppDataDirectory, "git-profile-transactions");
+
+    public async Task<OperationResult> RecoverInterruptedTransactionsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var directories = _fileSystem.EnumerateDirectories(TransactionRootDirectory)
+            .Where(path => Path.GetFileName(path).StartsWith("transaction-", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (directories.Count == 0)
+        {
+            return OperationResult.Ok("No interrupted Git Profile transaction was found.");
+        }
+
+        ToolchainInfo? tools = null;
+        foreach (var directory in directories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var manifestPath = Path.Combine(directory, TransactionManifestFileName);
+            if (!_fileSystem.FileExists(manifestPath))
+            {
+                TryDeleteDirectory(directory);
+                continue;
+            }
+
+            GitProfileTransactionManifest manifest;
+            try
+            {
+                manifest = await ReadTransactionAsync(directory, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                return OperationResult.Fail(
+                    "An interrupted Git Profile transaction could not be validated. No recovery changes were made.",
+                    exception.Message,
+                    directory);
+            }
+
+            if (manifest.State is TransactionStateCommitted or TransactionStateRolledBack or TransactionStatePrepared)
+            {
+                TryDeleteDirectory(directory);
+                continue;
+            }
+
+            if (!string.Equals(manifest.State, TransactionStateApplying, StringComparison.Ordinal))
+            {
+                return OperationResult.Fail(
+                    "An interrupted Git Profile transaction has an unknown state. No recovery changes were made.",
+                    $"State: {manifest.State}",
+                    directory);
+            }
+
+            tools ??= await _toolchainService.InspectAsync(cancellationToken).ConfigureAwait(false);
+            if (!tools.Git.Exists || string.IsNullOrWhiteSpace(tools.Git.SelectedPath))
+            {
+                return OperationResult.Fail(
+                    "An interrupted Git Profile transaction requires recovery, but git.exe was not found.",
+                    directory);
+            }
+
+            var snapshot = new GitProfileSnapshot(
+                manifest.Files.ToDictionary(
+                    item => item.Path,
+                    item => new GitProfileFileSnapshot(item.Exists, item.Content),
+                    StringComparer.OrdinalIgnoreCase),
+                manifest.IncludePaths);
+            var rollbackErrors = await RollbackAsync(snapshot, tools.Git.SelectedPath).ConfigureAwait(false);
+            if (rollbackErrors.Count > 0)
+            {
+                return OperationResult.Fail(
+                    "Interrupted Git Profile transaction recovery failed.",
+                    rollbackErrors.ToArray());
+            }
+
+            try
+            {
+                manifest.State = TransactionStateRolledBack;
+                await WriteTransactionAsync(directory, manifest, CancellationToken.None).ConfigureAwait(false);
+                TryDeleteDirectory(directory);
+            }
+            catch (Exception exception)
+            {
+                return OperationResult.Fail(
+                    "The Git Profile files were recovered, but the transaction journal could not be finalized.",
+                    exception.Message,
+                    directory);
+            }
+        }
+
+        return OperationResult.Ok("Interrupted Git Profile transactions were recovered.");
+    }
 
     public async Task<OperationResult<GitProfile>> SaveProfileAsync(
         GitProfile profile,
@@ -198,6 +302,12 @@ public sealed class GitProfileService
     {
         ArgumentNullException.ThrowIfNull(preview);
 
+        var recovery = await RecoverInterruptedTransactionsAsync(cancellationToken).ConfigureAwait(false);
+        if (!recovery.Success)
+        {
+            return OperationResult<GitProfileApplyResult>.Fail(recovery.Message, recovery.Errors.ToArray());
+        }
+
         var tools = await _toolchainService.InspectAsync(cancellationToken).ConfigureAwait(false);
         if (!tools.Git.Exists || string.IsNullOrWhiteSpace(tools.Git.SelectedPath))
         {
@@ -226,9 +336,15 @@ public sealed class GitProfileService
         var stagedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var mutationStarted = false;
         ProcessResult? registration = null;
+        GitProfileTransactionManifest? transaction = null;
+        string? transactionDirectory = null;
 
         try
         {
+            (transactionDirectory, transaction) = await CreateTransactionAsync(
+                snapshot,
+                gitPath,
+                cancellationToken).ConfigureAwait(false);
             await _backupService.CreateSnapshotAsync(
                 "Apply Git Profile conditional config",
                 cancellationToken).ConfigureAwait(false);
@@ -260,6 +376,8 @@ public sealed class GitProfileService
                 return StalePreviewFailure(changedPreviewPath);
             }
 
+            transaction.State = TransactionStateApplying;
+            await WriteTransactionAsync(transactionDirectory, transaction, cancellationToken).ConfigureAwait(false);
             mutationStarted = true;
             _fileSystem.CreateDirectory(ProfilesDirectory);
             await _fileSystem.WriteAllTextAtomicAsync(
@@ -308,6 +426,10 @@ public sealed class GitProfileService
 
             await VerifyAppliedStateAsync(preview, gitPath, expectedIncludes, cancellationToken).ConfigureAwait(false);
 
+            transaction.State = TransactionStateCommitted;
+            await WriteTransactionAsync(transactionDirectory, transaction, cancellationToken).ConfigureAwait(false);
+            TryDeleteDirectory(transactionDirectory);
+
             return OperationResult<GitProfileApplyResult>.Ok(new GitProfileApplyResult
             {
                 MasterConfigPath = MasterConfigPath,
@@ -319,12 +441,28 @@ public sealed class GitProfileService
         {
             if (!mutationStarted)
             {
+                var journalError = await TryFinalizeTransactionAsync(
+                    transactionDirectory,
+                    transaction,
+                    TransactionStateRolledBack).ConfigureAwait(false);
                 return OperationResult<GitProfileApplyResult>.Fail(
                     "Git Profile files were not changed because preparation failed.",
-                    exception.Message);
+                    new[] { exception.Message }.Concat(journalError is null ? [] : [journalError]).ToArray());
             }
 
             var rollbackErrors = await RollbackAsync(snapshot, gitPath).ConfigureAwait(false);
+            if (rollbackErrors.Count == 0)
+            {
+                var finalizationError = await TryFinalizeTransactionAsync(
+                    transactionDirectory,
+                    transaction,
+                    TransactionStateRolledBack).ConfigureAwait(false);
+                if (finalizationError is not null)
+                {
+                    rollbackErrors.Add(finalizationError);
+                }
+            }
+
             if (rollbackErrors.Count == 0)
             {
                 return OperationResult<GitProfileApplyResult>.Fail(
@@ -348,6 +486,132 @@ public sealed class GitProfileService
             }
         }
     }
+
+    private async Task<(string Directory, GitProfileTransactionManifest Manifest)> CreateTransactionAsync(
+        GitProfileSnapshot snapshot,
+        string gitExecutablePath,
+        CancellationToken cancellationToken)
+    {
+        _fileSystem.CreateDirectory(TransactionRootDirectory);
+        var id = Guid.NewGuid().ToString("N");
+        var directory = Path.Combine(TransactionRootDirectory, $"transaction-{id}");
+        _fileSystem.CreateDirectory(directory);
+        var manifest = new GitProfileTransactionManifest
+        {
+            Id = id,
+            State = TransactionStatePrepared,
+            GitExecutablePath = gitExecutablePath,
+            IncludePaths = snapshot.IncludePaths.ToList(),
+            Files = snapshot.Files
+                .OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(item => new GitProfileTransactionFile
+                {
+                    Path = Path.GetFullPath(item.Key),
+                    Exists = item.Value.Exists,
+                    Content = item.Value.Content,
+                    Sha256 = ComputeSha256(item.Value.Content ?? string.Empty)
+                })
+                .ToList()
+        };
+
+        await WriteTransactionAsync(directory, manifest, cancellationToken).ConfigureAwait(false);
+        _ = await ReadTransactionAsync(directory, cancellationToken).ConfigureAwait(false);
+        return (directory, manifest);
+    }
+
+    private async Task<GitProfileTransactionManifest> ReadTransactionAsync(
+        string directory,
+        CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(directory, TransactionManifestFileName);
+        var text = await _fileSystem.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+        var manifest = JsonSerializer.Deserialize<GitProfileTransactionManifest>(text, TransactionJsonOptions)
+            ?? throw new InvalidDataException("The Git Profile transaction journal is empty.");
+        if (manifest.SchemaVersion != 1 || string.IsNullOrWhiteSpace(manifest.Id))
+        {
+            throw new InvalidDataException("The Git Profile transaction journal version or identity is invalid.");
+        }
+
+        manifest.Files ??= [];
+        manifest.IncludePaths ??= [];
+        var expectedPrefix = Path.GetFullPath(ProfilesDirectory).TrimEnd(Path.DirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in manifest.Files)
+        {
+            var fullPath = Path.GetFullPath(file.Path);
+            if (!fullPath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException($"Transaction file path escapes the Git Profile directory: {file.Path}");
+            }
+
+            if (file.Exists && file.Content is null)
+            {
+                throw new InvalidDataException($"Transaction snapshot content is missing: {file.Path}");
+            }
+
+            if (!string.Equals(file.Sha256, ComputeSha256(file.Content ?? string.Empty), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException($"Transaction snapshot SHA-256 is invalid: {file.Path}");
+            }
+
+            if (!paths.Add(fullPath))
+            {
+                throw new InvalidDataException($"Transaction snapshot contains a duplicate file path: {file.Path}");
+            }
+
+            file.Path = fullPath;
+        }
+
+        return manifest;
+    }
+
+    private Task WriteTransactionAsync(
+        string directory,
+        GitProfileTransactionManifest manifest,
+        CancellationToken cancellationToken)
+        => _fileSystem.WriteAllTextAtomicAsync(
+            Path.Combine(directory, TransactionManifestFileName),
+            JsonSerializer.Serialize(manifest, TransactionJsonOptions) + Environment.NewLine,
+            cancellationToken);
+
+    private async Task<string?> TryFinalizeTransactionAsync(
+        string? directory,
+        GitProfileTransactionManifest? manifest,
+        string state)
+    {
+        if (directory is null || manifest is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            manifest.State = state;
+            await WriteTransactionAsync(directory, manifest, CancellationToken.None).ConfigureAwait(false);
+            TryDeleteDirectory(directory);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return $"Transaction journal finalization failed: {exception.Message}";
+        }
+    }
+
+    private void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            _fileSystem.DeleteDirectory(path, true);
+        }
+        catch
+        {
+            // A committed or rolled-back journal is safe to retry during the next startup.
+        }
+    }
+
+    private static string ComputeSha256(string content)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
 
     private async Task<OperationResult<IReadOnlyList<string>>> ReadGlobalIncludesAsync(
         string gitPath,
@@ -593,6 +857,32 @@ public sealed class GitProfileService
     private sealed record GitProfileSnapshot(
         IReadOnlyDictionary<string, GitProfileFileSnapshot> Files,
         IReadOnlyList<string> IncludePaths);
+
+    private sealed class GitProfileTransactionManifest
+    {
+        public int SchemaVersion { get; set; } = 1;
+
+        public string Id { get; set; } = string.Empty;
+
+        public string State { get; set; } = TransactionStatePrepared;
+
+        public string GitExecutablePath { get; set; } = string.Empty;
+
+        public List<GitProfileTransactionFile> Files { get; set; } = [];
+
+        public List<string> IncludePaths { get; set; } = [];
+    }
+
+    private sealed class GitProfileTransactionFile
+    {
+        public string Path { get; set; } = string.Empty;
+
+        public bool Exists { get; set; }
+
+        public string? Content { get; set; }
+
+        public string Sha256 { get; set; } = string.Empty;
+    }
 
     public GitProfile? ResolveProfile(AppConfig config, string? repositoryDirectory, IEnumerable<string>? remoteUrls = null)
     {

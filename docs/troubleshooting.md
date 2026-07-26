@@ -29,6 +29,12 @@ SSH Config and Git Profile previews record original existence and SHA-256. If a 
 
 Git URL rewrite plans do not yet carry an equivalent creation-time token. They are transactionally applied and rolled back, but affected values are captured when apply starts. Creation-time stale-plan rejection is planned for v0.4.11.
 
+## An interrupted Git Profile transaction cannot be recovered
+
+The next GUI start or confirmed write command recovers a validated `applying` journal before performing new work. If journal validation, Git discovery, file restoration, or `include.path` restoration fails, GitKeyRouter leaves the journal under `%APPDATA%\GitKeyRouter\git-profile-transactions` and blocks the new writer.
+
+Do not delete or edit that journal before preserving a copy. Resolve the reported Git/filesystem problem and retry GitKeyRouter; the same journal is deliberately retried on the next exclusive startup. A journal hash or path validation error means the recovery evidence is untrusted and requires manual inspection.
+
 ## Multiple executable candidates
 
 Diagnostics lists every existing candidate found in PATH and common Windows locations. The first candidate in the documented lookup order is selected; no PATH or installation setting is changed.

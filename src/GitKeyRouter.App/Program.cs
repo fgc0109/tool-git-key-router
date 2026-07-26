@@ -27,6 +27,19 @@ internal static class Program
         try
         {
             services = AppBootstrapper.CreateServices();
+            if (instanceGuard is { IsPrimaryInstance: true })
+            {
+                var recovery = services.GitProfileService
+                    .RecoverInterruptedTransactionsAsync()
+                    .GetAwaiter()
+                    .GetResult();
+                if (!recovery.Success)
+                {
+                    throw new InvalidOperationException(
+                        string.Join(Environment.NewLine, new[] { recovery.Message }.Concat(recovery.Errors)));
+                }
+            }
+
             if (args.Length > 0)
             {
                 ConsoleBridge.Attach();

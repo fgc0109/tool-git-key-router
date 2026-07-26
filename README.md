@@ -348,6 +348,8 @@ git_url_rewrites.json
 
 “预览并应用”会先显示入口文件和所有 Profile 文件的 diff。删除 Profile 或规则后，需要再次应用才能同步删除已经生成的条件配置。
 
+应用前会把所有受影响的 Profile 文件、原始存在状态、内容校验值和全局 `include.path` 顺序写入 `%APPDATA%\GitKeyRouter\git-profile-transactions`。如果进程在正式写入期间崩溃或系统断电，下一次取得排他锁的 GUI 或确认写入命令会先恢复原状态；恢复失败时会保留事务日志并阻止新的写入，避免覆盖仍可恢复的现场。
+
 ## CLI
 
 GUI 与 CLI 使用同一个服务图和同一套业务逻辑。

@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using GitKeyRouter.Core.Abstractions;
 using GitKeyRouter.Core.Models;
 using GitKeyRouter.Core.Services;
@@ -82,6 +85,90 @@ public sealed class GitProfileServiceTests
         Assert.Single(Directory.GetFiles(service.ProfilesDirectory, "profile-*.gitconfig"));
         Assert.Contains(runner.Requests, request => request.Arguments.SequenceEqual(["config", "--global", "--add", "include.path", service.MasterConfigPath.Replace('\\', '/')]));
         Assert.Equal([service.MasterConfigPath.Replace('\\', '/')], runner.IncludePaths);
+        Assert.Empty(Directory.EnumerateDirectories(service.TransactionRootDirectory));
+    }
+
+    [Fact]
+    public async Task Recovery_RestoresInterruptedApplyingTransactionFromPersistentJournal()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var runner = new GitProfileProcessRunner();
+        runner.IncludePaths.Add("C:/current/profiles.gitconfig");
+        var service = CreateService(new InMemoryAppConfigStore(), paths, runner);
+        Directory.CreateDirectory(service.ProfilesDirectory);
+        var profilePath = Path.Combine(service.ProfilesDirectory, "profile-work.gitconfig");
+        var newlyCreatedPath = Path.Combine(service.ProfilesDirectory, "profile-new.gitconfig");
+        await File.WriteAllTextAsync(service.MasterConfigPath, "new master");
+        await File.WriteAllTextAsync(profilePath, "new profile");
+        await File.WriteAllTextAsync(newlyCreatedPath, "newly created");
+        await WriteTransactionAsync(
+            service,
+            "applying",
+            [
+                new JournalFile(service.MasterConfigPath, true, "old master"),
+                new JournalFile(profilePath, true, "old profile"),
+                new JournalFile(newlyCreatedPath, false, null)
+            ],
+            ["C:/existing/base.gitconfig"]);
+
+        var result = await service.RecoverInterruptedTransactionsAsync();
+
+        Assert.True(result.Success);
+        Assert.Equal("old master", await File.ReadAllTextAsync(service.MasterConfigPath));
+        Assert.Equal("old profile", await File.ReadAllTextAsync(profilePath));
+        Assert.False(File.Exists(newlyCreatedPath));
+        Assert.Equal(["C:/existing/base.gitconfig"], runner.IncludePaths);
+        Assert.Empty(Directory.EnumerateDirectories(service.TransactionRootDirectory));
+    }
+
+    [Fact]
+    public async Task Recovery_RejectsTamperedJournalWithoutChangingCurrentFilesOrIncludes()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var runner = new GitProfileProcessRunner();
+        runner.IncludePaths.Add("C:/current/profiles.gitconfig");
+        var service = CreateService(new InMemoryAppConfigStore(), paths, runner);
+        Directory.CreateDirectory(service.ProfilesDirectory);
+        await File.WriteAllTextAsync(service.MasterConfigPath, "current master");
+        var transactionDirectory = await WriteTransactionAsync(
+            service,
+            "applying",
+            [new JournalFile(service.MasterConfigPath, true, "old master", "BAD-SHA256")],
+            ["C:/existing/base.gitconfig"]);
+
+        var result = await service.RecoverInterruptedTransactionsAsync();
+
+        Assert.False(result.Success);
+        Assert.Contains("could not be validated", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("current master", await File.ReadAllTextAsync(service.MasterConfigPath));
+        Assert.Equal(["C:/current/profiles.gitconfig"], runner.IncludePaths);
+        Assert.True(Directory.Exists(transactionDirectory));
+    }
+
+    [Fact]
+    public async Task RecoveryFailureKeepsApplyingJournalForNextStartupRetry()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        var runner = new GitProfileProcessRunner { FailAllIncludeAdds = true };
+        runner.IncludePaths.Add("C:/current/profiles.gitconfig");
+        var service = CreateService(new InMemoryAppConfigStore(), paths, runner);
+        Directory.CreateDirectory(service.ProfilesDirectory);
+        await File.WriteAllTextAsync(service.MasterConfigPath, "current master");
+        var transactionDirectory = await WriteTransactionAsync(
+            service,
+            "applying",
+            [new JournalFile(service.MasterConfigPath, true, "old master")],
+            ["C:/existing/base.gitconfig"]);
+
+        var result = await service.RecoverInterruptedTransactionsAsync();
+
+        Assert.False(result.Success);
+        Assert.True(Directory.Exists(transactionDirectory));
+        var journal = await File.ReadAllTextAsync(Path.Combine(transactionDirectory, "transaction.json"));
+        Assert.Contains("\"State\":\"applying\"", journal, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -251,6 +338,41 @@ public sealed class GitProfileServiceTests
             EnableCommitSigning = true
         };
 
+    private static async Task<string> WriteTransactionAsync(
+        GitProfileService service,
+        string state,
+        IReadOnlyList<JournalFile> files,
+        IReadOnlyList<string> includePaths)
+    {
+        var id = Guid.NewGuid().ToString("N");
+        var directory = Path.Combine(service.TransactionRootDirectory, $"transaction-{id}");
+        Directory.CreateDirectory(directory);
+        var document = new
+        {
+            SchemaVersion = 1,
+            Id = id,
+            State = state,
+            GitExecutablePath = "git.exe",
+            Files = files.Select(file => new
+            {
+                file.Path,
+                file.Exists,
+                file.Content,
+                Sha256 = file.Sha256 ?? ComputeSha256(file.Content ?? string.Empty)
+            }),
+            IncludePaths = includePaths
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "transaction.json"),
+            JsonSerializer.Serialize(document));
+        return directory;
+    }
+
+    private static string ComputeSha256(string content)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+
+    private sealed record JournalFile(string Path, bool Exists, string? Content, string? Sha256 = null);
+
     private sealed class GitProfileProcessRunner : IProcessRunner
     {
         public List<string> IncludePaths { get; } = [];
@@ -258,6 +380,8 @@ public sealed class GitProfileServiceTests
         public List<ProcessRequest> Requests { get; } = [];
 
         public bool FailNextProfileRegistration { get; init; }
+
+        public bool FailAllIncludeAdds { get; init; }
 
         private bool _registrationFailed;
 
@@ -289,6 +413,11 @@ public sealed class GitProfileServiceTests
                 && arguments[3] == "include.path")
             {
                 var value = arguments[4];
+                if (FailAllIncludeAdds)
+                {
+                    return Task.FromResult(Result(request, 1, error: "Simulated include add failure."));
+                }
+
                 if (FailNextProfileRegistration
                     && !_registrationFailed
                     && value.EndsWith("/profiles.gitconfig", StringComparison.OrdinalIgnoreCase))

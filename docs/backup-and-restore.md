@@ -9,7 +9,9 @@ A general GitKeyRouter snapshot can contain:
 - `git_url_rewrites.json`: the exact captured Git URL rewrite pairs.
 - `manifest.json`: creation time, reason, source existence flags, configuration schema, Git capture status, and per-file length/SHA-256 metadata.
 
-Git Profile files (`profiles.gitconfig`, `profile-*.gitconfig`) and the original global `include.path` sequence are not persisted in this format. Git Profile apply currently uses its own in-memory transaction and automatic rollback; it is not recoverable after a process crash or power loss.
+Git Profile files (`profiles.gitconfig`, `profile-*.gitconfig`) and the original global `include.path` sequence are not persisted in this general snapshot format. Git Profile apply uses a separate journal under `%APPDATA%\GitKeyRouter\git-profile-transactions`, containing the exact affected files, existence state, content hashes, original contents, and ordered `include.path` values. An interrupted `applying` transaction is rolled back when the next exclusive GitKeyRouter writer starts.
+
+Do not treat the transaction directory as user-managed backup history. Completed journals are removed automatically. If validation or recovery fails, the journal remains in place and new writes are blocked so that the recovery evidence is not overwritten.
 
 ## Atomic snapshot publication
 
