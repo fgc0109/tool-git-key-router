@@ -514,6 +514,8 @@ artifacts\release\                                  # 带版本号的 ZIP 和 SH
 
 进程操作通过接口抽象，绝大多数测试使用内存或临时目录。
 
+ProcessRunner 的输出、超时、取消和进程树测试使用仓库内专用子进程与 ready 文件握手，不依赖 `cmd.exe`、`ping` 或 100 ms 猜测时序。
+
 Git 集成测试通过：
 
 ```text

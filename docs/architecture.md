@@ -20,6 +20,8 @@ Git/OpenSSH commands use `ProcessStartInfo` with `UseShellExecute = false` and a
 
 `ProcessRunner` reads stdout and stderr asynchronously with independent line limits and a per-line character limit. Truncated output preserves a head and tail summary and sets `StandardOutputTruncated` or `StandardErrorTruncated`. Results distinguish startup failure, user cancellation, timeout, non-zero exit, and process-tree termination failure (`KillFailed` / `TerminationError`).
 
+Process execution tests launch the repository-owned `GitKeyRouter.ProcessTestChild` executable. Output modes produce fixed stdout/stderr or oversized lines; wait and process-tree modes atomically publish ready files before the test cancels or waits for timeout. This removes shell, network utility, and sub-100-ms scheduling assumptions while retaining a real Windows process-tree integration boundary.
+
 `SafeFileLogger` sends messages and exception text through a bounded redaction pipeline before writing. Generated non-backtracking regular expressions remove private-key blocks, credential URL user-info, Authorization Bearer values, common password/token/secret and ASKPASS assignments, and prefixed GitHub/GitLab tokens. After the multiline private-key pass, credential matching is line-scoped to keep long logs linear. Plain URLs, paths, SSH public keys/fingerprints, and unprefixed commit SHA values remain readable.
 
 ## Application instance boundary

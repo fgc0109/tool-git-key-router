@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using GitKeyRouter.Core.Models;
 using GitKeyRouter.Infrastructure.ProcessExecution;
+using GitKeyRouter.Tests.TestSupport;
 
 namespace GitKeyRouter.Tests;
 
@@ -12,13 +13,8 @@ public sealed class ProcessRunnerTests
         var runner = new ProcessRunner();
         var result = await runner.RunAsync(new ProcessRequest
         {
-            ExecutablePath = "cmd.exe",
-            Arguments =
-            [
-                "/d",
-                "/c",
-                "for /L %i in (1,1,20) do @echo stdout-%i & for /L %i in (1,1,20) do @echo stderr-%i 1>&2"
-            ],
+            ExecutablePath = ChildExecutablePath,
+            Arguments = ["emit-lines", "20"],
             MaxOutputLines = 6
         });
 
@@ -39,8 +35,8 @@ public sealed class ProcessRunnerTests
         var runner = new ProcessRunner();
         var result = await runner.RunAsync(new ProcessRequest
         {
-            ExecutablePath = "cmd.exe",
-            Arguments = ["/d", "/c", "(for /L %i in (1,1,300) do @<nul set /p =x) & @echo."],
+            ExecutablePath = ChildExecutablePath,
+            Arguments = ["emit-line", "300"],
             MaxOutputCharactersPerLine = 80
         });
 
@@ -69,10 +65,15 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
-    public async Task Run_ReportsTimeoutAndTerminatesProcessTree()
+    public async Task Run_ReportsTimeoutAfterChildSignalsReady()
     {
+        using var temp = new TemporaryDirectory();
+        var readyPath = Path.Combine(temp.Path, "timeout.ready");
         var runner = new ProcessRunner();
-        var result = await runner.RunAsync(SlowRequest(TimeSpan.FromMilliseconds(100)));
+        var runTask = runner.RunAsync(WaitRequest(readyPath, TimeSpan.FromSeconds(2)));
+        await WaitForReadyAsync(readyPath, runTask);
+
+        var result = await runTask;
 
         Assert.True(result.TimedOut);
         Assert.False(result.Cancelled);
@@ -81,14 +82,19 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
-    public async Task Run_ReportsUserCancellationSeparately()
+    public async Task Run_ReportsUserCancellationAfterChildSignalsReady()
     {
+        using var temp = new TemporaryDirectory();
+        var readyPath = Path.Combine(temp.Path, "cancel.ready");
         var runner = new ProcessRunner();
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-
-        var result = await runner.RunAsync(
-            SlowRequest(TimeSpan.FromSeconds(10)),
+        using var cancellation = new CancellationTokenSource();
+        var runTask = runner.RunAsync(
+            WaitRequest(readyPath, TimeSpan.FromSeconds(30)),
             cancellation.Token);
+        await WaitForReadyAsync(readyPath, runTask);
+
+        cancellation.Cancel();
+        var result = await runTask;
 
         Assert.False(result.TimedOut);
         Assert.True(result.Cancelled);
@@ -96,11 +102,45 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
+    public async Task Run_CancellationTerminatesSpawnedChildTree()
+    {
+        using var temp = new TemporaryDirectory();
+        var parentReadyPath = Path.Combine(temp.Path, "parent.ready");
+        var childReadyPath = Path.Combine(temp.Path, "child.ready");
+        var runner = new ProcessRunner();
+        using var cancellation = new CancellationTokenSource();
+        var request = new ProcessRequest
+        {
+            ExecutablePath = ChildExecutablePath,
+            Arguments = ["spawn-tree", parentReadyPath, childReadyPath],
+            Timeout = TimeSpan.FromSeconds(30),
+            TerminationWaitTimeout = TimeSpan.FromSeconds(5)
+        };
+        var runTask = runner.RunAsync(request, cancellation.Token);
+        await WaitForReadyAsync(parentReadyPath, runTask);
+        Assert.True(File.Exists(childReadyPath));
+        var childPid = int.Parse(
+            await File.ReadAllTextAsync(parentReadyPath),
+            System.Globalization.CultureInfo.InvariantCulture);
+
+        cancellation.Cancel();
+        var result = await runTask;
+
+        Assert.True(result.Cancelled);
+        Assert.False(result.KillFailed);
+        Assert.True(WaitForProcessExit(childPid, TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
     public async Task Run_ReportsTerminationFailureWithoutHidingTimeout()
     {
+        using var temp = new TemporaryDirectory();
+        var readyPath = Path.Combine(temp.Path, "termination.ready");
         var runner = new ReportingTerminationFailureRunner();
+        var runTask = runner.RunAsync(WaitRequest(readyPath, TimeSpan.FromSeconds(2)));
+        await WaitForReadyAsync(readyPath, runTask);
 
-        var result = await runner.RunAsync(SlowRequest(TimeSpan.FromMilliseconds(100)));
+        var result = await runTask;
 
         Assert.True(result.TimedOut);
         Assert.True(result.KillFailed);
@@ -108,14 +148,62 @@ public sealed class ProcessRunnerTests
         Assert.False(result.Succeeded);
     }
 
-    private static ProcessRequest SlowRequest(TimeSpan timeout)
+    private static ProcessRequest WaitRequest(string readyPath, TimeSpan timeout)
         => new()
         {
-            ExecutablePath = "cmd.exe",
-            Arguments = ["/d", "/c", "ping 127.0.0.1 -n 6 > nul"],
+            ExecutablePath = ChildExecutablePath,
+            Arguments = ["wait-ready", readyPath],
             Timeout = timeout,
-            TerminationWaitTimeout = TimeSpan.FromSeconds(2)
+            TerminationWaitTimeout = TimeSpan.FromSeconds(5)
         };
+
+    private static string ChildExecutablePath
+    {
+        get
+        {
+            var path = Path.Combine(
+                AppContext.BaseDirectory,
+                "process-test-child",
+                "GitKeyRouter.ProcessTestChild.exe");
+            return File.Exists(path)
+                ? path
+                : throw new FileNotFoundException("The deterministic process test child was not copied.", path);
+        }
+    }
+
+    private static async Task WaitForReadyAsync(string readyPath, Task<ProcessResult> runTask)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (!File.Exists(readyPath))
+        {
+            if (runTask.IsCompleted)
+            {
+                var result = await runTask.ConfigureAwait(false);
+                throw new InvalidOperationException(
+                    $"The process ended before its ready handshake. Exit={result.ExitCode}; stderr={result.StandardError}");
+            }
+
+            if (stopwatch.Elapsed > TimeSpan.FromSeconds(10))
+            {
+                throw new TimeoutException($"The process did not create its ready handshake: {readyPath}");
+            }
+
+            await Task.Delay(10).ConfigureAwait(false);
+        }
+    }
+
+    private static bool WaitForProcessExit(int processId, TimeSpan timeout)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.HasExited || process.WaitForExit((int)timeout.TotalMilliseconds);
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+    }
 
     private sealed class ReportingTerminationFailureRunner : ProcessRunner
     {

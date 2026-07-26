@@ -47,7 +47,7 @@ GitKeyRouter is designed around convenient management, transparent state, and re
 - Dangerous operations show a text diff or structured change plan first.
 - A snapshot is created before changes, and restore operations create another safety snapshot before restoring.
 - The GUI and write-capable CLI commands used with `--yes` share a single-instance lock for the current Windows user. Read-only, preview, diagnostic, test, version, and help commands remain available while the GUI is running.
-- Private-key blocks are redacted from logs. Logs rotate at 5 MB by default, retain three historical files, and never interrupt the primary operation when logging fails.
+- Private-key blocks, credential URLs, Bearer values, common secret/token/ASKPASS assignments, and prefixed GitHub/GitLab tokens are redacted from logs. Logs rotate at 5 MB by default, retain three historical files, and never interrupt the primary operation when logging fails.
 
 ## System requirements
 
@@ -507,6 +507,8 @@ These directories contain local generated artifacts and are ignored by `.gitigno
 ## Test isolation
 
 Process operations are abstracted behind interfaces, and most tests use in-memory objects or temporary directories.
+
+ProcessRunner output, timeout, cancellation, and process-tree tests use a repository-owned child executable and ready-file handshakes. They do not depend on `cmd.exe`, `ping`, or 100 ms scheduling guesses.
 
 Git integration tests set:
 
