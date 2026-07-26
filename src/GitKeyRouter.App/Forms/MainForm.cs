@@ -424,9 +424,10 @@ public sealed class MainForm : Form
 
         try
         {
-            var config = await _services.ConfigStore.LoadAsync();
+            var snapshot = await _services.ConfigStore.LoadSnapshotAsync();
+            var config = snapshot.Config;
             config.UiLanguage = AppLocalization.CurrentCode;
-            await _services.ConfigStore.SaveAsync(config);
+            await _services.ConfigStore.SaveIfUnchangedAsync(config, snapshot.Version);
         }
         catch (Exception exception)
         {

@@ -143,7 +143,8 @@ public sealed class GitProfileService
         GitProfile profile,
         CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var validation = GitProfileValidator.Validate(profile, config);
         if (!validation.IsValid)
         {
@@ -165,13 +166,14 @@ public sealed class GitProfileService
             config.GitProfiles.Add(profile);
         }
 
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult<GitProfile>.Ok(profile, "Git Profile saved.");
     }
 
     public async Task<OperationResult> DeleteProfileAsync(string profileId, CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var profile = config.GitProfiles.FirstOrDefault(item => string.Equals(item.Id, profileId, StringComparison.OrdinalIgnoreCase));
         if (profile is null)
         {
@@ -181,7 +183,7 @@ public sealed class GitProfileService
         await _backupService.CreateSnapshotAsync($"Delete Git Profile: {profile.DisplayName}", cancellationToken).ConfigureAwait(false);
         config.GitProfiles.Remove(profile);
         config.GitProfileRules.RemoveAll(item => string.Equals(item.ProfileId, profileId, StringComparison.OrdinalIgnoreCase));
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult.Ok("Git Profile deleted.");
     }
 
@@ -189,7 +191,8 @@ public sealed class GitProfileService
         GitProfileRule rule,
         CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var validation = GitProfileRuleValidator.Validate(rule, config);
         if (!validation.IsValid)
         {
@@ -208,13 +211,14 @@ public sealed class GitProfileService
             config.GitProfileRules.Add(rule);
         }
 
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult<GitProfileRule>.Ok(rule, "Git Profile rule saved.");
     }
 
     public async Task<OperationResult> DeleteRuleAsync(string ruleId, CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var rule = config.GitProfileRules.FirstOrDefault(item => string.Equals(item.Id, ruleId, StringComparison.OrdinalIgnoreCase));
         if (rule is null)
         {
@@ -223,7 +227,7 @@ public sealed class GitProfileService
 
         await _backupService.CreateSnapshotAsync("Delete Git Profile rule", cancellationToken).ConfigureAwait(false);
         config.GitProfileRules.Remove(rule);
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult.Ok("Git Profile rule deleted.");
     }
 

@@ -30,7 +30,8 @@ public sealed class IdentityService
 
     public async Task<OperationResult<GitIdentity>> SaveAsync(GitIdentity identity, CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var unmanagedHostAliases = _sshConfigService is null
             ? []
             : _sshConfigService.ParseUnmanagedHostAliases(
@@ -62,13 +63,14 @@ public sealed class IdentityService
             config.Identities.Add(identity);
         }
 
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult<GitIdentity>.Ok(identity, "Identity saved.");
     }
 
     public async Task<OperationResult> DeleteAsync(string identityId, CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var identity = config.Identities.FirstOrDefault(item => string.Equals(item.Id, identityId, StringComparison.OrdinalIgnoreCase));
         if (identity is null)
         {
@@ -82,7 +84,7 @@ public sealed class IdentityService
             route.Enabled = false;
         }
 
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult.Ok("Identity record deleted. Key files were not deleted; related routes were disabled.");
     }
 }

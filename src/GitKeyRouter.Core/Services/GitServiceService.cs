@@ -28,7 +28,8 @@ public sealed class GitServiceService
 
     public async Task<IReadOnlyList<GitServiceInstance>> ListAsync(CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         return config.GitServices.OrderBy(item => item.IsBuiltIn ? 0 : 1)
             .ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
@@ -38,7 +39,8 @@ public sealed class GitServiceService
         GitServiceInstance service,
         CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var existing = config.FindService(service.Id);
         if (existing?.IsBuiltIn == true)
         {
@@ -77,13 +79,14 @@ public sealed class GitServiceService
 
         config.SynchronizeDefaultServiceRoutes();
 
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult<GitServiceInstance>.Ok(service, "Git service saved.");
     }
 
     public async Task<OperationResult> DeleteAsync(string id, CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var service = config.FindService(id);
         if (service is null)
         {
@@ -103,7 +106,7 @@ public sealed class GitServiceService
 
         await _backupService.CreateSnapshotAsync($"Delete Git service: {service.DisplayName}", cancellationToken).ConfigureAwait(false);
         config.GitServices.Remove(service);
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult.Ok("Git service deleted.");
     }
 

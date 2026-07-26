@@ -43,7 +43,8 @@ public sealed class OwnerRouteService
         CancellationToken cancellationToken = default)
     {
         route.Normalize();
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var validation = OwnerRouteValidator.Validate(
             route,
             config,
@@ -78,7 +79,7 @@ public sealed class OwnerRouteService
             existing.Enabled = route.Enabled;
         }
 
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult<RepositoryRoute>.Ok(route, "Repository route saved.");
     }
 
@@ -90,7 +91,8 @@ public sealed class OwnerRouteService
         string namespacePath,
         CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var route = config.RepositoryRoutes.FirstOrDefault(item =>
             string.Equals(item.ServiceInstanceId, serviceInstanceId, StringComparison.OrdinalIgnoreCase)
             && string.Equals(item.NamespacePath, namespacePath, StringComparison.OrdinalIgnoreCase));
@@ -103,13 +105,14 @@ public sealed class OwnerRouteService
             $"Delete repository route: {serviceInstanceId}/{namespacePath}",
             cancellationToken).ConfigureAwait(false);
         config.RepositoryRoutes.Remove(route);
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult.Ok("Repository route deleted from application configuration.");
     }
 
     public async Task<OperationResult> DeleteByIdAsync(string routeId, CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = snapshot.Config;
         var route = config.RepositoryRoutes.FirstOrDefault(item =>
             string.Equals(item.Id, routeId, StringComparison.OrdinalIgnoreCase));
         if (route is null)
@@ -121,7 +124,7 @@ public sealed class OwnerRouteService
             $"Delete repository route: {route.ServiceInstanceId}/{route.DisplayPath}",
             cancellationToken).ConfigureAwait(false);
         config.RepositoryRoutes.Remove(route);
-        await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+        await _configStore.SaveIfUnchangedAsync(config, snapshot.Version, cancellationToken).ConfigureAwait(false);
         return OperationResult.Ok("Repository route deleted from application configuration.");
     }
 

@@ -34,17 +34,46 @@ internal sealed class TestAppPaths : IAppPaths
 
 internal sealed class InMemoryAppConfigStore : IAppConfigStore
 {
+    private int _revision;
+
     public string ConfigPath => "memory://config.json";
 
     public AppConfig Config { get; set; } = new();
 
     public Task<AppConfig> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(Config);
 
+    public Task<AppConfigSnapshot> LoadSnapshotAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(new AppConfigSnapshot(Config, Version));
+
     public Task SaveAsync(AppConfig config, CancellationToken cancellationToken = default)
     {
         Config = config;
+        _revision++;
         return Task.CompletedTask;
     }
+
+    public Task<AppConfigFileVersion> SaveIfUnchangedAsync(
+        AppConfig config,
+        AppConfigFileVersion expectedVersion,
+        CancellationToken cancellationToken = default)
+    {
+        if (expectedVersion != Version)
+        {
+            throw new AppConfigConcurrencyException(ConfigPath);
+        }
+
+        Config = config;
+        _revision++;
+        return Task.FromResult(Version);
+    }
+
+    public void SimulateExternalChange(AppConfig config)
+    {
+        Config = config;
+        _revision++;
+    }
+
+    private AppConfigFileVersion Version => new(true, _revision.ToString(System.Globalization.CultureInfo.InvariantCulture));
 }
 
 internal sealed class NoOpBackupService : IBackupService

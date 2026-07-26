@@ -39,7 +39,8 @@ public sealed class SshKeyRenameService
             return OperationResult<SshKeyRenamePlan>.Fail("The new key filename is invalid.", nameError);
         }
 
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var configSnapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = configSnapshot.Config;
         var identity = config.Identities.FirstOrDefault(item =>
             string.Equals(item.Id, identityId, StringComparison.OrdinalIgnoreCase));
         if (identity is null)
@@ -193,7 +194,8 @@ public sealed class SshKeyRenameService
                 "The identity changed after the rename preview was created. Refresh and preview the operation again.");
         }
 
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var configSnapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = configSnapshot.Config;
         var originalPaths = config.Identities.ToDictionary(
             item => item.Id,
             item => (item.PrivateKeyPath, item.PublicKeyPath),
@@ -205,6 +207,7 @@ public sealed class SshKeyRenameService
             StringComparer.OrdinalIgnoreCase);
         var moved = new List<SshKeyFileMove>();
         var backups = new List<string>();
+        AppConfigFileVersion? savedConfigVersion = null;
 
         try
         {
@@ -228,7 +231,10 @@ public sealed class SshKeyRenameService
             }
 
             ApplyPathReplacements(config.Identities, replacements);
-            await _configStore.SaveAsync(config, cancellationToken).ConfigureAwait(false);
+            savedConfigVersion = await _configStore.SaveIfUnchangedAsync(
+                config,
+                configSnapshot.Version,
+                cancellationToken).ConfigureAwait(false);
 
             var updatedSsh = originalSsh;
             var affectedIds = currentPlan.AffectedIdentityIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -264,17 +270,23 @@ public sealed class SshKeyRenameService
             var rollbackErrors = new List<string>();
             try
             {
-                var rollbackConfig = await _configStore.LoadAsync(CancellationToken.None).ConfigureAwait(false);
-                foreach (var identity in rollbackConfig.Identities)
+                if (savedConfigVersion is not null)
                 {
-                    if (originalPaths.TryGetValue(identity.Id, out var paths))
+                    var rollbackSnapshot = await _configStore.LoadSnapshotAsync(CancellationToken.None).ConfigureAwait(false);
+                    foreach (var identity in rollbackSnapshot.Config.Identities)
                     {
-                        identity.PrivateKeyPath = paths.PrivateKeyPath;
-                        identity.PublicKeyPath = paths.PublicKeyPath;
+                        if (originalPaths.TryGetValue(identity.Id, out var paths))
+                        {
+                            identity.PrivateKeyPath = paths.PrivateKeyPath;
+                            identity.PublicKeyPath = paths.PublicKeyPath;
+                        }
                     }
-                }
 
-                await _configStore.SaveAsync(rollbackConfig, CancellationToken.None).ConfigureAwait(false);
+                    await _configStore.SaveIfUnchangedAsync(
+                        rollbackSnapshot.Config,
+                        savedConfigVersion,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
             }
             catch (Exception rollbackException)
             {
