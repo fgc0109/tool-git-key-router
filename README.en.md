@@ -11,7 +11,7 @@ GitKeyRouter is a local desktop application for Windows 10 and Windows 11 that c
 - GitHub.com, GitLab.com, self-hosted GitLab, Gitea, and generic Git service instances
 - Multiple SSH identities, accounts, and key paths for each service
 - Service-specific HostAlias entries generated in `%USERPROFILE%\.ssh\config`
-- Gitea service-wide default identity routing and GitHub multi-account Owner / Repository routing through global `url.*.insteadOf` Git configuration
+- Default-identity fallback routing for each Git service plus precise Owner / Repository routing through global `url.*.insteadOf` Git configuration
 - Git Profiles that automatically select `user.name`, `user.email`, and signing keys by directory or remote URL
 - Diffs, command output, backups, and selective restore before configuration changes
 - A WinForms GUI and a simple CLI that can also be invoked by DevRunner
@@ -171,7 +171,7 @@ Normal synchronization does not rewrite the complete SSH Config. Full-text repla
 
 ### 6. Configure default identities and repository routing
 
-For Gitea, `AccountName` represents the web-login account and is not assumed to be the repository Owner. Selecting a `DefaultIdentityId` for a Gitea service generates service-wide routing for the entire instance. For example:
+Every Git service can select a `DefaultIdentityId`; GitKeyRouter generates a service-wide fallback for repositories that do not match a more specific rule. For Gitea, `AccountName` represents the web-login account and is not assumed to be the repository Owner. For example:
 
 ```text
 url.git@gitea-cloud:.insteadOf = git@git.policoil.top:
@@ -182,7 +182,7 @@ url.git@gitea-cloud:.insteadOf = https://git.policoil.top/
 
 This preserves original Owners such as `project-base/*`, `game-riki/*`, and `game-hhmx/*` while routing all of them through the `gitea-cloud` HostAlias. Two independent Gitea services may share the same key files, but they must have separate service IDs, HostAliases, and HostNames.
 
-GitHub continues to route by Owner and does not allow a default identity that covers all of `github.com`. For example:
+GitHub may also have a default identity as a fallback for Owners or repositories without explicit routes. Longer, more specific Owner / Repository prefixes still take priority. Leave the default identity empty if only explicit multi-account routes are desired. For example:
 
 ```text
 camus0109/*
@@ -191,6 +191,8 @@ camus0109/*
 project-base-mirror/*
 → github-project-base
 ```
+
+Routes derived from a default identity always use the managed ID `service-default:<serviceId>`. Saving a default identity claims an existing unmarked legacy service route; clearing the default removes that derived route without deleting Owner / Repository routes.
 
 For `camus0109`, the expected rules are:
 
@@ -432,7 +434,7 @@ CLI diagnostic exit codes:
 
 ## Configuration upgrades
 
-The current configuration schema is Schema 4. The `SchemaVersion` property name is read case-insensitively, so forms such as `schemaVersion` are not mistaken for Schema 1; application loading, backup manifests, and restore validation share the same rule. A missing property still migrates as Schema 1, while duplicate, non-integer, invalid, or future values are rejected without modifying the source file. Reading an older configuration preserves all services, identities, key paths, repository routes, and Git Profiles. For non-GitHub services that have a default identity but no service route, normalization derives a service-wide route. Legacy Gitea account-level rewrites are not deleted automatically; they are converted only after user-confirmed migration. GitHub Owner routing remains compatible. A snapshot is still created before modifying configuration.
+The current configuration schema is Schema 4. The `SchemaVersion` property name is read case-insensitively, so forms such as `schemaVersion` are not mistaken for Schema 1; application loading, backup manifests, and restore validation share the same rule. A missing property still migrates as Schema 1, while duplicate, non-integer, invalid, or future values are rejected without modifying the source file. Reading an older configuration preserves all services, identities, key paths, repository routes, and Git Profiles. For any service that has a default identity but no managed service route, normalization derives a service-wide route. Legacy Gitea account-level rewrites are not deleted automatically; they are converted only after user-confirmed migration. GitHub Owner routing remains compatible. A snapshot is still created before modifying configuration.
 
 ## Input validation
 
@@ -545,7 +547,7 @@ Check `%USERPROFILE%\.ssh\known_hosts` and the current network environment. GitK
 
 On the **Git Rewrite Configuration** page, check:
 
-- Whether the Gitea service has a default identity that belongs to that service
+- Whether the Git service has a default identity that belongs to it and a corresponding `service-default:<serviceId>` route
 - Whether current rules match the expected service-wide rules
 - Whether HTTPS / SSH insteadOf entries are `Correct`, missing, or waiting for legacy-route migration
 - Whether a longer or conflicting prefix exists

@@ -154,10 +154,11 @@ public sealed class AppConfig
                 && string.Equals(item.ServiceInstanceId, service.Id, StringComparison.OrdinalIgnoreCase));
             if (serviceRoute is null)
             {
-                serviceRoute = new RepositoryRoute { Id = managedRouteId };
+                serviceRoute = new RepositoryRoute();
                 RepositoryRoutes.Add(serviceRoute);
             }
 
+            serviceRoute.Id = managedRouteId;
             serviceRoute.ServiceInstanceId = service.Id;
             serviceRoute.IdentityId = defaultIdentity.Id;
             serviceRoute.Scope = GitRouteScope.Service;

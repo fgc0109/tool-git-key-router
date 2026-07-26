@@ -54,6 +54,65 @@ public sealed class GitServiceServiceTests
     }
 
     [Fact]
+    public async Task ExistingServiceRouteIsClaimedAndRemovedWhenDefaultIdentityIsCleared()
+    {
+        var github = GitServiceInstance.CreateGitHubCom();
+        var identity = new GitIdentity
+        {
+            Id = "github-default",
+            ServiceInstanceId = github.Id,
+            DisplayName = "GitHub Default",
+            AccountName = "default-user",
+            HostAlias = "github-default"
+        };
+        var ownerRoute = new RepositoryRoute
+        {
+            Id = "owner-route",
+            ServiceInstanceId = github.Id,
+            IdentityId = identity.Id,
+            Scope = GitRouteScope.Owner,
+            NamespacePath = "project-base",
+            Enabled = true
+        };
+        var legacyServiceRoute = new RepositoryRoute
+        {
+            Id = "legacy-service-route",
+            ServiceInstanceId = github.Id,
+            IdentityId = identity.Id,
+            Scope = GitRouteScope.Service,
+            Enabled = true
+        };
+        var backup = new NoOpBackupService();
+        var store = new InMemoryAppConfigStore
+        {
+            Config = new AppConfig
+            {
+                GitServices = [github],
+                Identities = [identity],
+                RepositoryRoutes = [ownerRoute, legacyServiceRoute]
+            }
+        };
+        var service = CreateService(store, backup);
+        github.DefaultIdentityId = identity.Id;
+
+        var setResult = await service.SaveAsync(github);
+
+        Assert.True(setResult.Success);
+        var managed = Assert.Single(store.Config.RepositoryRoutes, route => route.Scope == GitRouteScope.Service);
+        Assert.Equal($"service-default:{github.Id}", managed.Id);
+        Assert.Equal(identity.Id, managed.IdentityId);
+        Assert.Contains(store.Config.RepositoryRoutes, route => route.Id == ownerRoute.Id);
+
+        github.DefaultIdentityId = null;
+        var clearResult = await service.SaveAsync(github);
+
+        Assert.True(clearResult.Success);
+        Assert.DoesNotContain(store.Config.RepositoryRoutes, route => route.Scope == GitRouteScope.Service);
+        Assert.Contains(store.Config.RepositoryRoutes, route => route.Id == ownerRoute.Id);
+        Assert.Equal(2, backup.SnapshotCount);
+    }
+
+    [Fact]
     public async Task SavesAndDeletesUnreferencedGiteaService()
     {
         var store = new InMemoryAppConfigStore();

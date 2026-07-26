@@ -10,6 +10,48 @@ public sealed class DiagnosticServiceTests
     private const string OpenSsh = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f first@example.com";
 
     [Fact]
+    public async Task AcceptsGitHubDefaultIdentityWhenManagedServiceRouteExists()
+    {
+        using var directory = new TemporaryDirectory();
+        var paths = new TestAppPaths(directory.Path);
+        var github = GitServiceInstance.CreateGitHubCom();
+        var identity = new GitIdentity
+        {
+            Id = "github-default",
+            ServiceInstanceId = github.Id,
+            DisplayName = "GitHub Default",
+            AccountName = "default-user",
+            HostAlias = "github-default",
+            PrivateKeyPath = Path.Combine(paths.SshDirectory, "id_default"),
+            PublicKeyPath = Path.Combine(paths.SshDirectory, "id_default.pub")
+        };
+        github.DefaultIdentityId = identity.Id;
+        var config = new AppConfig
+        {
+            GitServices = [github],
+            Identities = [identity]
+        };
+        config.SynchronizeDefaultServiceRoutes();
+        var configStore = new InMemoryAppConfigStore { Config = config };
+        var fileSystem = new PhysicalFileSystem();
+        var backup = new NoOpBackupService();
+        var diagnostics = new DiagnosticService(
+            configStore,
+            paths,
+            fileSystem,
+            new FixedToolchainService("git.exe", "ssh-keygen.exe", "ssh.exe"),
+            new SshConfigService(fileSystem, paths, backup),
+            new GitUrlRewriteService(configStore, new FakeGitUrlRewriteStore(), backup),
+            new TestClock());
+
+        var report = await diagnostics.RunAsync();
+
+        Assert.DoesNotContain(report.Items, item => item.Code == "GITHUB_SERVICE_ROUTE_FORBIDDEN");
+        Assert.DoesNotContain(report.Items, item => item.Code == "SERVICE_DEFAULT_ROUTE_MISSING");
+        Assert.DoesNotContain(report.Items, item => item.Code == "SERVICE_ROUTE_WITHOUT_DEFAULT");
+    }
+
+    [Fact]
     public async Task ReportsSameServiceKeyReuseAcrossAccountsAsError()
     {
         using var directory = new TemporaryDirectory();

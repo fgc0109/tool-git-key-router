@@ -11,7 +11,7 @@ GitKeyRouter 是一个面向 Windows 10 / Windows 11 的本地桌面工具，用
 - GitHub.com、GitLab.com、自建 GitLab、Gitea 和通用 Git 服务实例
 - 每个服务下的多个 SSH 身份、账号和密钥路径
 - `%USERPROFILE%\.ssh\config` 中按服务生成的 HostAlias
-- Gitea 服务级默认身份路由，以及 GitHub 多账号 Owner / Repository 路由的 `url.*.insteadOf` 全局 Git 配置
+- 各 Git 服务的默认身份回退路由，以及 Owner / Repository 精确路由的 `url.*.insteadOf` 全局 Git 配置
 - 按目录或远程 URL 自动选择 `user.name`、`user.email` 和签名密钥的 Git Profiles
 - 配置修改前的 diff、命令输出、备份和选择性恢复
 - GUI 与 DevRunner 可调用的简单 CLI
@@ -171,7 +171,7 @@ Host github-camus
 
 ### 6. 配置默认身份与仓库路由
 
-Gitea 的 `AccountName` 只表示网页登录账号，不代表仓库 Owner。为 Gitea 服务选择 `DefaultIdentityId` 后，GitKeyRouter 会生成覆盖整个实例的服务级路由。例如远程 Gitea：
+所有 Git 服务都可以选择 `DefaultIdentityId`，GitKeyRouter 会为未命中更具体规则的仓库生成覆盖整个实例的服务级回退路由。Gitea 的 `AccountName` 只表示网页登录账号，不代表仓库 Owner。例如远程 Gitea：
 
 ```text
 url.git@gitea-cloud:.insteadOf = git@git.policoil.top:
@@ -182,7 +182,7 @@ url.git@gitea-cloud:.insteadOf = https://git.policoil.top/
 
 因此 `project-base/*`、`game-riki/*` 和 `game-hhmx/*` 都会保留原始 Owner，并统一使用 `gitea-cloud` HostAlias。两个独立 Gitea 服务可以共用密钥文件，但必须使用独立服务 Id、HostAlias 和 HostName。
 
-GitHub 继续按 Owner 路由，不允许设置覆盖整个 `github.com` 的默认身份。示例：
+GitHub 也可以配置默认身份，作为未配置 Owner / Repository 的回退；更长、更具体的 Owner / Repository 前缀仍优先匹配。若只希望显式多账号路由，可以不设置默认身份。示例：
 
 ```text
 camus0109/*
@@ -191,6 +191,8 @@ camus0109/*
 project-base-mirror/*
 → github-project-base
 ```
+
+默认身份派生的服务路由统一使用 `service-default:<serviceId>` 标识。如果旧配置已有未标记的服务级路由，保存默认身份时会将其纳入托管；清除默认身份时会删除该派生路由，但不会删除 Owner / Repository 路由。
 
 对于 `camus0109`，期望规则为：
 
@@ -432,7 +434,7 @@ CLI 诊断退出码：
 
 ## 配置升级
 
-当前使用 Schema 4。`SchemaVersion` 属性名按 JSON 的大小写不敏感规则读取，因此 `schemaVersion` 等写法不会被误判为 Schema 1；应用加载、备份清单和恢复校验使用同一规则。缺失版本属性仍按 Schema 1 迁移，重复、非整数、无效或高于当前版本的值会在不修改原文件的前提下被拒绝。读取旧配置时会保留全部服务、身份、密钥路径、仓库路由和 Git Profiles；对于配置了默认身份但缺少服务路由的非 GitHub 服务，会在规范化时派生服务级路由。旧 Gitea 账号级 rewrite 不会自动删除，只有用户确认迁移后才转换。GitHub Owner 路由保持兼容。修改配置前仍会创建快照。
+当前使用 Schema 4。`SchemaVersion` 属性名按 JSON 的大小写不敏感规则读取，因此 `schemaVersion` 等写法不会被误判为 Schema 1；应用加载、备份清单和恢复校验使用同一规则。缺失版本属性仍按 Schema 1 迁移，重复、非整数、无效或高于当前版本的值会在不修改原文件的前提下被拒绝。读取旧配置时会保留全部服务、身份、密钥路径、仓库路由和 Git Profiles；对于配置了默认身份但缺少托管服务路由的服务，会在规范化时派生服务级路由。旧 Gitea 账号级 rewrite 不会自动删除，只有用户确认迁移后才转换。GitHub Owner 路由保持兼容。修改配置前仍会创建快照。
 
 ## 输入校验
 
@@ -545,7 +547,7 @@ GIT_CONFIG_GLOBAL=<temporary-file>
 
 在“Git 重写配置”检查：
 
-- Gitea 服务是否选择了属于本服务的默认身份
+- Git 服务是否选择了属于本服务的默认身份，以及对应 `service-default:<serviceId>` 路由是否存在
 - 当前实际规则与期望服务级规则是否一致
 - HTTPS / SSH insteadOf 是否为 `Correct`，或是否显示缺失/旧路由迁移状态
 - 是否存在更长或冲突的前缀

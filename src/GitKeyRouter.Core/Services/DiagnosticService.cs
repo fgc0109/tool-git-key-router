@@ -116,25 +116,25 @@ public sealed partial class DiagnosticService
             var serviceRoutes = config.RepositoryRoutes.Where(route => route.Enabled
                 && route.Scope == GitRouteScope.Service
                 && string.Equals(route.ServiceInstanceId, service.Id, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (defaultIdentity is not null && serviceRoutes.Count == 0)
+            {
+                Add(report, "SERVICE_DEFAULT_ROUTE_MISSING", "Routes", $"Default identity has no service route: {service.DisplayName}",
+                    $"Default identity: {defaultIdentity.DisplayName} ({defaultIdentity.HostAlias})", DiagnosticSeverity.Error,
+                    "Save the service again to recreate its managed service-level route.");
+            }
+            else if (defaultIdentity is null && serviceRoutes.Count > 0)
+            {
+                Add(report, "SERVICE_ROUTE_WITHOUT_DEFAULT", "Routes", $"Service route has no default identity: {service.DisplayName}",
+                    $"Enabled service routes: {serviceRoutes.Count}", DiagnosticSeverity.Error,
+                    "Save the service after selecting a default identity, or remove the stale service-level route.");
+            }
+
             if (service.ProviderKind == GitProviderKind.Gitea)
             {
                 Add(report, $"GITEA_SSH_USER_{service.Id}", "Git services", $"Gitea SSH user: {service.DisplayName}",
                     $"SSH User is '{service.SshUser}'. In Gitea, 'git' is the shared SSH service account; the real web user is identified by the submitted public key, not by AccountName.",
                     string.Equals(service.SshUser, "git", StringComparison.OrdinalIgnoreCase) ? DiagnosticSeverity.Normal : DiagnosticSeverity.Warning,
                     string.Equals(service.SshUser, "git", StringComparison.OrdinalIgnoreCase) ? null : "Use SSH User 'git' unless this Gitea instance is explicitly configured otherwise.");
-                if (defaultIdentity is not null && serviceRoutes.Count == 0)
-                {
-                    Add(report, "GITEA_DEFAULT_ROUTE_MISSING", "Routes", $"Gitea default identity has no service route: {service.DisplayName}",
-                        $"Default identity: {defaultIdentity.DisplayName} ({defaultIdentity.HostAlias})", DiagnosticSeverity.Error,
-                        "Save the service again or create an enabled service-level route for the default identity.");
-                }
-            }
-            else if (service.ProviderKind == GitProviderKind.GitHub
-                && (defaultIdentity is not null || serviceRoutes.Count > 0))
-            {
-                Add(report, "GITHUB_SERVICE_ROUTE_FORBIDDEN", "Routes", "GitHub is configured with a service-level identity",
-                    "A github.com-wide rewrite would force every Owner through one SSH key and break multi-account routing.",
-                    DiagnosticSeverity.Error, "Remove the service-level default and configure explicit Owner routes.");
             }
 
             if ((service.SshPort ?? 22) == 22)
