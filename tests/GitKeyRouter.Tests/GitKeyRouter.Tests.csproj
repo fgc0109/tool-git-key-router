@@ -15,5 +15,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\GitKeyRouter.Core\GitKeyRouter.Core.csproj" />
     <ProjectReference Include="..\..\src\GitKeyRouter.Infrastructure\GitKeyRouter.Infrastructure.csproj" />
+    <ProjectReference Include="..\GitKeyRouter.ProcessTestChild\GitKeyRouter.ProcessTestChild.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
+  <Target Name="CopyProcessTestChild" AfterTargets="Build">
+    <ItemGroup>
+      <ProcessTestChildFiles Include="..\GitKeyRouter.ProcessTestChild\bin\$(Configuration)\net10.0\GitKeyRouter.ProcessTestChild*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ProcessTestChildFiles)" DestinationFolder="$(OutDir)process-test-child" />
+  </Target>
 </Project>
