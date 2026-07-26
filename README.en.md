@@ -574,6 +574,8 @@ tests/
 - [Architecture](docs/architecture.md)
 - [Backup and restore](docs/backup-and-restore.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Optimization status and roadmap (Chinese)](docs/project-optimization-status.md)
+- [Version record index (Chinese)](docs/version-records.md)
 - [Security policy](SECURITY.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Chinese README](README.md)

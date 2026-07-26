@@ -4,36 +4,51 @@
 
 ### GitKeyRouter.Core
 
-Contains models, validation, pure SSH managed-block editing, URL rewrite comparison, backup contracts, diagnostics, and application services. It has no WinForms dependency and no direct `Process.Start` calls.
+Contains models, validation, SSH managed-block editing, URL rewrite comparison and reconciliation, backup contracts, diagnostics, and application services. It has no WinForms dependency and does not start external processes directly.
 
 ### GitKeyRouter.Infrastructure
 
-Contains physical filesystem access, atomic JSON writes, process execution, executable discovery, Git configuration access, safe logging, and backup persistence.
+Contains physical filesystem access, atomic JSON writes, bounded process execution, executable discovery, Git configuration access, safe logging, and backup persistence.
 
 ### GitKeyRouter.App
 
-Contains the WinForms shell, pages, dialogs, CLI dispatcher, and the manual service composition root. GUI and CLI use the same `ApplicationServices` instance graph.
+Contains the WinForms shell, controls, dialogs, CLI dispatcher, and manual composition root. GUI and CLI use the same `ApplicationServices` graph.
 
-## Process safety
+## Process and command safety
 
-All Git/OpenSSH invocations use:
+Git/OpenSSH commands use `ProcessStartInfo` with `UseShellExecute = false` and add every argument through `ArgumentList`. User-controlled namespaces, aliases, URLs, and paths are not interpolated into `cmd.exe` or PowerShell commands.
 
-```csharp
-var startInfo = new ProcessStartInfo
-{
-    FileName = executablePath,
-    UseShellExecute = false,
-    RedirectStandardOutput = true,
-    RedirectStandardError = true
-};
+`ProcessRunner` reads stdout and stderr asynchronously with independent line limits and a per-line character limit. Truncated output preserves a head and tail summary and sets `StandardOutputTruncated` or `StandardErrorTruncated`. Results distinguish startup failure, user cancellation, timeout, non-zero exit, and process-tree termination failure (`KillFailed` / `TerminationError`).
 
-startInfo.ArgumentList.Add("config");
-startInfo.ArgumentList.Add("--global");
-```
+## Application instance boundary
 
-User-controlled Owner, HostAlias and paths are never interpolated into a shell command.
+GUI startup and confirmed write commands (`apply --yes`, `apply-profiles --yes`) share a per-Windows-user mutex. Read-only, preview, diagnostic, parsing, and connection-test CLI commands do not take the exclusive lock. Version and help commands return before application-service construction.
 
-## SSH Config editing
+The mutex prevents concurrent GitKeyRouter writers; it does not replace file/rewrite conflict detection for external editors, Git tools, or synchronization software.
+
+## Application configuration persistence
+
+`config.json` uses `System.Text.Json`. Saving writes a UTF-8 temporary file, flushes it, and moves it over the target. A malformed existing file is never automatically replaced.
+
+Schema property names are read case-insensitively by application loading, backup metadata capture, and restore validation. Missing `SchemaVersion` remains compatible with Schema 1; duplicate, non-integer, invalid, or future schema values are rejected.
+
+Ordinary configuration saves do not yet expose a repository-wide optimistic concurrency token. Compound operations that need preview/apply protection must carry and verify their own source snapshots.
+
+## Git Profile transaction
+
+`GitProfileService.ApplyAsync` performs the following method-level transaction:
+
+1. Verify `git.exe` and read the exact global `include.path` sequence.
+2. Reject a preview if the profile file set, existence state, or SHA-256 changed.
+3. Capture all affected profile files and `include.path` values in memory.
+4. Generate every target file in a `.pending-*` staging directory and validate it with Git.
+5. Recheck the preview token, atomically write target files, remove stale profile files, and register the master include.
+6. Re-read the final files and global includes.
+7. On failure after mutation starts, restore the captured files and include sequence and verify the rollback.
+
+The snapshot is not persisted. A process crash, power loss, or restart after live mutation starts can therefore bypass method-level rollback. A recoverable on-disk transaction journal remains planned work.
+
+## SSH Config editing and synchronization
 
 Automated edits are based on exact marker pairs:
 
@@ -43,18 +58,33 @@ Automated edits are based on exact marker pairs:
 # END GitKeyRouter managed block: <alias>
 ```
 
-The service locates the exact block range and replaces or removes only that range. A duplicate marker pair is treated as an error rather than guessed.
+The service locates an exact block range and replaces or removes only that range. Duplicate complete blocks are treated as errors.
+
+Two synchronization modes are intentionally distinct:
+
+- Conservative synchronization updates and adds configured identities while retaining orphan managed blocks.
+- Strict synchronization also removes complete orphan GitKeyRouter managed blocks after an explicit diff and confirmation.
+
+Strict mode does not delete ordinary `Host` entries, comments, unmanaged text, or incomplete marker fragments. SSH previews record original file existence and SHA-256 and are rejected if the file changes before apply.
 
 ## Git URL rewrite reconciliation
 
-Expected rules are generated from enabled `OwnerRoute` records and their identities. Current rules are read with `git config --global --get-regexp` and classified as correct, missing, duplicate, conflict or extra.
+Expected rules are generated from enabled Service, Owner, and Repository routes and their identities. Current rules are read through `git config --global` and classified as correct, missing, duplicate, conflict, legacy, or extra.
 
-Removal uses `--fixed-value --unset-all` to avoid regular-expression interpretation of URLs.
+Applying a plan captures every affected key's current ordered value set, computes the desired set, creates a safety snapshot, performs exact changes, and re-reads the result. Any remove, add, verification, or related application-config save failure restores the affected keys and configuration and reports apply and rollback errors separately. Plan-external Git keys are not modified.
 
-## Persistence
+The plan object does not yet persist the affected values captured when the user first generated the preview. An external change between plan creation and `ApplyPlanAsync` is currently incorporated when apply begins rather than rejected as a stale plan.
 
-`config.json` uses `System.Text.Json`. Saving writes a UTF-8 temporary file, flushes it, and atomically moves it over the target. A malformed existing file is never automatically replaced.
+## Default service routes
 
-## Restore semantics
+A service default identity derives a managed Service route with ID `service-default:<serviceId>`. Saving a default claims an older unmarked Service route; clearing the default removes the derived route while preserving Owner and Repository routes. More specific Git URL prefixes continue to take priority over a service-wide fallback.
 
-Application config and SSH Config are restored independently. Git URL rewrite restoration removes current exact URL rewrite pairs and re-adds the snapshot pairs through `git config`; it never copies a complete `.gitconfig` file.
+## Backup and restore boundary
+
+General safety snapshots persist application config, SSH Config, and exact Git URL rewrite pairs. Snapshot directories are prepared under `.pending-*`, integrity-checked, and moved into view only when complete.
+
+Git Profile files and the global `include.path` sequence are not part of this general backup format; they currently rely on the method-level transaction described above.
+
+Application config, SSH Config, and Git URL rewrites are restored independently. Git rewrite restore performs exact Git configuration operations and never replaces the complete `.gitconfig` file.
+
+See [Backup and restore](backup-and-restore.md) for the file format and current visibility limitations, and [Optimization status and roadmap](project-optimization-status.md) for remaining work.
