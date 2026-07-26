@@ -164,9 +164,14 @@ public sealed class GiteaScopedRoutingTests
         var plan = new GitRewritePlan();
         plan.Removes.Add(desired);
         plan.Adds.Add(desired);
+        plan.CaptureOriginalValues(
+            desired.ConfigKey,
+            [desired.InsteadOfUrl, desired.InsteadOfUrl, unrelated.InsteadOfUrl]);
 
         var first = await service.ApplyPlanAsync(plan, "deduplicate");
-        var second = await service.ApplyPlanAsync(plan, "deduplicate again");
+        var second = await service.ApplyPlanAsync(
+            await service.BuildCleanupDuplicatesPlanAsync(),
+            "deduplicate again");
 
         Assert.True(first.Success);
         Assert.True(second.Success);

@@ -47,5 +47,13 @@ public sealed class GitRewritePlan
 
     public List<string> RepositoryRouteIdsToRemove { get; } = [];
 
+    public Dictionary<string, List<string>> OriginalValuesByKey { get; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public AppConfigFileVersion? ConfigVersion { get; set; }
+
     public bool HasChanges => Adds.Count > 0 || Removes.Count > 0 || RepositoryRouteIdsToRemove.Count > 0;
+
+    public void CaptureOriginalValues(string key, IEnumerable<string> values)
+        => OriginalValuesByKey[key] = values.ToList();
 }

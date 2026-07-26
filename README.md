@@ -379,6 +379,8 @@ GitKeyRouter.exe help
 
 `apply` 默认只显示 SSH diff 和 Git rewrite 计划。只有带 `--yes` 才执行修改。`apply-profiles` 采用相同策略，默认只显示条件 Git Config diff。
 
+配置写入会校验加载时的文件存在状态和 SHA-256；如果配置被其他程序替换或编辑，本次保存会拒绝覆盖并要求重新加载。Git rewrite 计划也保存所有受影响 key 在预览时的精确有序值，应用时只要这些值发生变化就拒绝旧计划；计划外 key 的变化不受影响。
+
 GUI 与带 `--yes` 的 `apply` / `apply-profiles` 共享排他锁，防止跨进程并发写入。其余 CLI 命令不取得该锁；`version` / `--version` 和 `help` / `--help` 还会在加载配置与创建应用服务之前直接返回，因此 GUI 运行时仍可用于脚本和发布验证。
 
 `test-route --connect` 必须同时提供真实 `--url`，避免程序对虚构仓库发起网络请求。

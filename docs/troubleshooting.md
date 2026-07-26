@@ -27,7 +27,7 @@ Do not work around exit code `4` by deleting mutex-related system objects. Finis
 
 SSH Config and Git Profile previews record original existence and SHA-256. If a file is created, removed, or edited after preview, apply is rejected with a message asking you to regenerate the preview. Reload the page, review the new diff, and confirm again; do not overwrite the external change manually unless you have reviewed it.
 
-Git URL rewrite plans do not yet carry an equivalent creation-time token. They are transactionally applied and rolled back, but affected values are captured when apply starts. Creation-time stale-plan rejection is planned for v0.4.11.
+Git URL rewrite plans record the exact ordered values for every affected key. A duplicate, order, case, addition, removal, or replacement change rejects the old plan; a change to an unrelated key does not. Application configuration saves similarly reject a file whose existence or SHA-256 changed after load. Reload the relevant page and review the new result instead of retrying the old plan.
 
 ## An interrupted Git Profile transaction cannot be recovered
 

@@ -70,6 +70,7 @@ public sealed class GitUrlRewriteServiceTests
         var plan = new GitRewritePlan();
         plan.Removes.AddRange([oldOne, oldTwo]);
         plan.Adds.AddRange([newOne, newTwo]);
+        plan.CaptureOriginalValues(oldOne.ConfigKey, [oldOne.InsteadOfUrl, oldTwo.InsteadOfUrl]);
 
         var result = await service.ApplyPlanAsync(plan, "test rollback");
 
@@ -97,6 +98,7 @@ public sealed class GitUrlRewriteServiceTests
         var plan = new GitRewritePlan();
         plan.Removes.AddRange([oldOne, oldTwo]);
         plan.Adds.AddRange([newOne, newTwo]);
+        plan.CaptureOriginalValues(oldOne.ConfigKey, [oldOne.InsteadOfUrl, oldTwo.InsteadOfUrl]);
 
         var result = await service.ApplyPlanAsync(plan, "test rollback failure");
 
@@ -121,6 +123,7 @@ public sealed class GitUrlRewriteServiceTests
         var plan = new GitRewritePlan();
         plan.Removes.AddRange([oldOne, oldTwo]);
         plan.Adds.AddRange([newOne, newTwo]);
+        plan.CaptureOriginalValues(oldOne.ConfigKey, [oldOne.InsteadOfUrl, oldTwo.InsteadOfUrl]);
 
         var result = await service.ApplyPlanAsync(plan, "test exact target");
 
@@ -129,6 +132,74 @@ public sealed class GitUrlRewriteServiceTests
             [newOne.InsteadOfUrl, newTwo.InsteadOfUrl],
             await git.GetValuesAsync(newOne.ConfigKey));
         Assert.Contains(unrelated, git.Rules);
+    }
+
+    [Fact]
+    public async Task ApplyPlan_RejectsAffectedKeyOrderChangeAfterPreview()
+    {
+        const string baseUrl = "git@managed:";
+        var oldOne = new GitUrlRewriteRule(baseUrl, "https://old-one.example/");
+        var oldTwo = new GitUrlRewriteRule(baseUrl, "https://old-two.example/");
+        var replacement = new GitUrlRewriteRule(baseUrl, "https://new.example/");
+        var git = new FakeGitUrlRewriteStore();
+        git.Rules.AddRange([oldOne, oldTwo]);
+        var backup = new NoOpBackupService();
+        var service = new GitUrlRewriteService(ConfigStore(), git, backup);
+        var plan = new GitRewritePlan();
+        plan.Removes.Add(oldOne);
+        plan.Adds.Add(replacement);
+        plan.CaptureOriginalValues(oldOne.ConfigKey, [oldOne.InsteadOfUrl, oldTwo.InsteadOfUrl]);
+        git.Rules.Clear();
+        git.Rules.AddRange([oldTwo, oldOne]);
+
+        var result = await service.ApplyPlanAsync(plan, "stale order");
+
+        Assert.False(result.Success);
+        Assert.Contains("changed after the preview", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal([oldTwo, oldOne], git.Rules);
+        Assert.Equal(0, backup.SnapshotCount);
+    }
+
+    [Fact]
+    public async Task ApplyPlan_AllowsChangesToPlanExternalKeys()
+    {
+        const string baseUrl = "git@managed:";
+        var oldRule = new GitUrlRewriteRule(baseUrl, "https://old.example/");
+        var replacement = new GitUrlRewriteRule(baseUrl, "https://new.example/");
+        var unrelated = new GitUrlRewriteRule("git@unrelated:", "https://external.example/");
+        var git = new FakeGitUrlRewriteStore();
+        git.Rules.Add(oldRule);
+        var service = new GitUrlRewriteService(ConfigStore(), git, new NoOpBackupService());
+        var plan = new GitRewritePlan();
+        plan.Removes.Add(oldRule);
+        plan.Adds.Add(replacement);
+        plan.CaptureOriginalValues(oldRule.ConfigKey, [oldRule.InsteadOfUrl]);
+        git.Rules.Add(unrelated);
+
+        var result = await service.ApplyPlanAsync(plan, "external key change");
+
+        Assert.True(result.Success);
+        Assert.Contains(replacement, git.Rules);
+        Assert.Contains(unrelated, git.Rules);
+    }
+
+    [Fact]
+    public async Task ApplyPlan_RejectsStaleConfigurationBeforeRouteRemoval()
+    {
+        var configStore = ConfigStore();
+        var snapshot = await configStore.LoadSnapshotAsync();
+        var plan = new GitRewritePlan { ConfigVersion = snapshot.Version };
+        plan.RepositoryRouteIdsToRemove.Add("route-to-remove");
+        configStore.SimulateExternalChange(new AppConfig { UiLanguage = "en-US" });
+        var backup = new NoOpBackupService();
+        var service = new GitUrlRewriteService(configStore, new FakeGitUrlRewriteStore(), backup);
+
+        var result = await service.ApplyPlanAsync(plan, "stale config");
+
+        Assert.False(result.Success);
+        Assert.Contains("configuration changed", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, backup.SnapshotCount);
+        Assert.Equal("en-US", configStore.Config.UiLanguage);
     }
 
     [Fact]

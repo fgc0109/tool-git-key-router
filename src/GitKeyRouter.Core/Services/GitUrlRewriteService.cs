@@ -109,7 +109,7 @@ public sealed class GitUrlRewriteService
             }
         }
 
-        return plan;
+        return CapturePlanState(plan, actual);
     }
 
     public async Task<GitRewritePlan> BuildCleanupDuplicatesPlanAsync(CancellationToken cancellationToken = default)
@@ -124,7 +124,7 @@ public sealed class GitUrlRewriteService
             plan.Adds.Add(rule);
         }
 
-        return plan;
+        return CapturePlanState(plan, actual);
     }
 
     public async Task<GitRewritePlan> BuildDeleteRulePlanAsync(
@@ -141,7 +141,7 @@ public sealed class GitUrlRewriteService
             plan.Removes.Add(rule);
         }
 
-        return plan;
+        return CapturePlanState(plan, actual);
     }
 
     public async Task<GitRewritePlan> BuildDeleteOwnerPlanAsync(string owner, CancellationToken cancellationToken = default)
@@ -172,7 +172,7 @@ public sealed class GitUrlRewriteService
             }
         }
 
-        return plan;
+        return CapturePlanState(plan, actual);
     }
 
     public async Task<GitRewritePlan> BuildDeleteRouteByIdPlanAsync(
@@ -195,7 +195,7 @@ public sealed class GitUrlRewriteService
             }
         }
 
-        return plan;
+        return CapturePlanState(plan, actual);
     }
 
     public async Task<GitRewritePlan> BuildRegeneratePlanAsync(CancellationToken cancellationToken = default)
@@ -217,12 +217,13 @@ public sealed class GitUrlRewriteService
             plan.Adds.Add(expectedRule);
         }
 
-        return plan;
+        return CapturePlanState(plan, actual);
     }
 
     public async Task<GitRewritePlan> BuildReconcilePlanAsync(CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var configSnapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = configSnapshot.Config;
         var expected = BuildCurrentExpectedRules(config);
         var actual = await _store.GetAllAsync(cancellationToken).ConfigureAwait(false);
         var plan = BuildReconcilePlan(expected, actual);
@@ -245,14 +246,18 @@ public sealed class GitUrlRewriteService
             }
         }
 
-        return plan;
+        return CapturePlanState(
+            plan,
+            actual,
+            plan.RepositoryRouteIdsToRemove.Count > 0 ? configSnapshot.Version : null);
     }
 
     public async Task<GitRewritePlan> BuildServiceRepairPlanAsync(
         string serviceInstanceId,
         CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var configSnapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = configSnapshot.Config;
         config.Normalize();
         var service = config.FindService(serviceInstanceId)
             ?? throw new InvalidOperationException($"Git service '{serviceInstanceId}' was not found.");
@@ -287,12 +292,16 @@ public sealed class GitUrlRewriteService
             plan.RepositoryRouteIdsToRemove.Add(routeId);
         }
 
-        return plan;
+        return CapturePlanState(
+            plan,
+            actual,
+            plan.RepositoryRouteIdsToRemove.Count > 0 ? configSnapshot.Version : null);
     }
 
     public async Task<GitRewritePlan> BuildLegacyAccountOwnerMigrationPlanAsync(CancellationToken cancellationToken = default)
     {
-        var config = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var configSnapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        var config = configSnapshot.Config;
         var actual = await _store.GetAllAsync(cancellationToken).ConfigureAwait(false);
         config.Normalize();
         var plan = new GitRewritePlan();
@@ -356,7 +365,10 @@ public sealed class GitUrlRewriteService
             }
         }
 
-        return plan;
+        return CapturePlanState(
+            plan,
+            actual,
+            plan.RepositoryRouteIdsToRemove.Count > 0 ? configSnapshot.Version : null);
     }
 
     public async Task<OperationResult<IReadOnlyList<ProcessResult>>> ApplyPlanAsync(
@@ -369,15 +381,28 @@ public sealed class GitUrlRewriteService
             return OperationResult<IReadOnlyList<ProcessResult>>.Ok([], "Git URL rewrite rules already match.");
         }
 
+        var keys = plan.Adds.Concat(plan.Removes)
+            .Select(item => item.ConfigKey)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var reconciliations = new List<RewriteReconciliation>();
         try
         {
-            var keys = plan.Adds.Concat(plan.Removes)
-                .Select(item => item.ConfigKey)
-                .Distinct(StringComparer.OrdinalIgnoreCase);
             foreach (var key in keys)
             {
+                if (!plan.OriginalValuesByKey.TryGetValue(key, out var expectedOriginal))
+                {
+                    return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                        "The Git URL rewrite plan does not contain a concurrency snapshot. Regenerate the preview.",
+                        key);
+                }
+
                 var current = await _store.GetValuesAsync(key, cancellationToken).ConfigureAwait(false);
+                if (!current.SequenceEqual(expectedOriginal, StringComparer.Ordinal))
+                {
+                    return StaleRewritePlanFailure(key);
+                }
+
                 var removed = plan.Removes
                     .Where(item => string.Equals(item.ConfigKey, key, StringComparison.OrdinalIgnoreCase))
                     .Select(item => item.InsteadOfUrl)
@@ -395,7 +420,7 @@ public sealed class GitUrlRewriteService
                     }
                 }
 
-                if (!current.SequenceEqual(desired, StringComparer.OrdinalIgnoreCase))
+                if (!current.SequenceEqual(desired, StringComparer.Ordinal))
                 {
                     reconciliations.Add(new RewriteReconciliation(
                         key,
@@ -408,7 +433,7 @@ public sealed class GitUrlRewriteService
         catch (Exception exception)
         {
             return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
-                "Failed to capture the affected Git URL rewrite keys. No changes were made.",
+                "Failed to verify the affected Git URL rewrite keys. No changes were made.",
                 exception.Message);
         }
 
@@ -419,12 +444,26 @@ public sealed class GitUrlRewriteService
 
         AppConfig? originalConfig = null;
         AppConfig? updatedConfig = null;
+        AppConfigFileVersion? expectedConfigVersion = null;
         if (plan.RepositoryRouteIdsToRemove.Count > 0)
         {
             try
             {
-                originalConfig = CloneConfig(
-                    await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false));
+                if (plan.ConfigVersion is null)
+                {
+                    return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                        "The Git URL rewrite plan does not contain an application configuration concurrency snapshot. Regenerate the preview.");
+                }
+
+                var configSnapshot = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+                if (configSnapshot.Version != plan.ConfigVersion)
+                {
+                    return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                        "The application configuration changed after the Git URL rewrite preview was created. Reload and retry; no changes were made.");
+                }
+
+                expectedConfigVersion = configSnapshot.Version;
+                originalConfig = CloneConfig(configSnapshot.Config);
                 updatedConfig = CloneConfig(originalConfig);
                 updatedConfig.RepositoryRoutes.RemoveAll(route =>
                     plan.RepositoryRouteIdsToRemove.Contains(route.Id, StringComparer.OrdinalIgnoreCase));
@@ -449,9 +488,39 @@ public sealed class GitUrlRewriteService
                 exception.Message);
         }
 
+        try
+        {
+            foreach (var reconciliation in reconciliations)
+            {
+                var current = await _store.GetValuesAsync(
+                    reconciliation.Key,
+                    cancellationToken).ConfigureAwait(false);
+                if (!current.SequenceEqual(reconciliation.Original, StringComparer.Ordinal))
+                {
+                    return StaleRewritePlanFailure(reconciliation.Key);
+                }
+            }
+
+            if (expectedConfigVersion is not null)
+            {
+                var currentConfig = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+                if (currentConfig.Version != expectedConfigVersion)
+                {
+                    return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                        "The application configuration changed while the safety backup was being created. Reload and retry; no changes were made.");
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            return OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+                "Failed to recheck concurrent changes after creating the safety backup. No changes were made.",
+                exception.Message);
+        }
+
         var results = new List<ProcessResult>();
         var gitMutationStarted = false;
-        var configMutationAttempted = false;
+        AppConfigFileVersion? savedConfigVersion = null;
         try
         {
             foreach (var reconciliation in reconciliations)
@@ -493,10 +562,13 @@ public sealed class GitUrlRewriteService
 
             if (updatedConfig is not null)
             {
-                configMutationAttempted = true;
-                await _configStore.SaveAsync(updatedConfig, cancellationToken).ConfigureAwait(false);
-                var verifiedConfig = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-                if (verifiedConfig.RepositoryRoutes.Any(route =>
+                savedConfigVersion = await _configStore.SaveIfUnchangedAsync(
+                    updatedConfig,
+                    expectedConfigVersion!,
+                    cancellationToken).ConfigureAwait(false);
+                var verifiedConfig = await _configStore.LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+                if (verifiedConfig.Version != savedConfigVersion
+                    || verifiedConfig.Config.RepositoryRoutes.Any(route =>
                         plan.RepositoryRouteIdsToRemove.Contains(route.Id, StringComparer.OrdinalIgnoreCase)))
                 {
                     throw new InvalidOperationException(
@@ -516,13 +588,17 @@ public sealed class GitUrlRewriteService
                 rollbackErrors.AddRange(await RestoreReconciliationsAsync(reconciliations).ConfigureAwait(false));
             }
 
-            if (configMutationAttempted && originalConfig is not null)
+            if (savedConfigVersion is not null && originalConfig is not null)
             {
                 try
                 {
-                    await _configStore.SaveAsync(originalConfig, CancellationToken.None).ConfigureAwait(false);
-                    var restoredConfig = await _configStore.LoadAsync(CancellationToken.None).ConfigureAwait(false);
-                    if (!ConfigsEqual(restoredConfig, originalConfig))
+                    var restoredVersion = await _configStore.SaveIfUnchangedAsync(
+                        originalConfig,
+                        savedConfigVersion,
+                        CancellationToken.None).ConfigureAwait(false);
+                    var restoredConfig = await _configStore.LoadSnapshotAsync(CancellationToken.None).ConfigureAwait(false);
+                    if (restoredConfig.Version != restoredVersion
+                        || !ConfigsEqual(restoredConfig.Config, originalConfig))
                     {
                         rollbackErrors.Add("Application configuration rollback verification failed.");
                     }
@@ -760,6 +836,30 @@ public sealed class GitUrlRewriteService
             .Where(item => !IsLegacyAccountOwnerEntry(item))
             .Select(item => item.Rule)
             .ToList();
+
+    private static GitRewritePlan CapturePlanState(
+        GitRewritePlan plan,
+        IReadOnlyList<GitUrlRewriteRule> actual,
+        AppConfigFileVersion? configVersion = null)
+    {
+        foreach (var key in plan.Adds.Concat(plan.Removes)
+                     .Select(item => item.ConfigKey)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            plan.CaptureOriginalValues(
+                key,
+                actual.Where(item => string.Equals(item.ConfigKey, key, StringComparison.OrdinalIgnoreCase))
+                    .Select(item => item.InsteadOfUrl));
+        }
+
+        plan.ConfigVersion = configVersion;
+        return plan;
+    }
+
+    private static OperationResult<IReadOnlyList<ProcessResult>> StaleRewritePlanFailure(string key)
+        => OperationResult<IReadOnlyList<ProcessResult>>.Fail(
+            "A Git URL rewrite key changed after the preview was created. Reload and review the new plan; no changes were made.",
+            key);
 
     private static GitRewritePlan BuildReconcilePlan(
         IReadOnlyList<GitUrlRewriteRule> expected,

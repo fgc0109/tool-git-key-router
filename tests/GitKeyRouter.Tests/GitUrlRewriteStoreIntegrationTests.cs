@@ -55,9 +55,14 @@ public sealed class GitUrlRewriteStoreIntegrationTests
         var plan = new GitRewritePlan();
         plan.Removes.Add(desired);
         plan.Adds.Add(desired);
+        plan.CaptureOriginalValues(
+            desired.ConfigKey,
+            [desired.InsteadOfUrl, desired.InsteadOfUrl, unrelated.InsteadOfUrl]);
 
         Assert.True((await service.ApplyPlanAsync(plan, "isolated reconcile")).Success);
-        Assert.True((await service.ApplyPlanAsync(plan, "isolated reconcile again")).Success);
+        Assert.True((await service.ApplyPlanAsync(
+            await service.BuildCleanupDuplicatesPlanAsync(),
+            "isolated reconcile again")).Success);
 
         var values = await store.GetValuesAsync(desired.ConfigKey);
         Assert.Equal(2, values.Count);

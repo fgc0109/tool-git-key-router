@@ -32,7 +32,7 @@ The mutex prevents concurrent GitKeyRouter writers; it does not replace file/rew
 
 Schema property names are read case-insensitively by application loading, backup metadata capture, and restore validation. Missing `SchemaVersion` remains compatible with Schema 1; duplicate, non-integer, invalid, or future schema values are rejected.
 
-Ordinary configuration saves do not yet expose a repository-wide optimistic concurrency token. Compound operations that need preview/apply protection must carry and verify their own source snapshots.
+Configuration snapshots carry the source file's existence state and SHA-256 over its exact bytes. Ordinary service mutations use conditional save and reject a file that was created, removed, or replaced after load. A successful conditional save returns the new token so a later rollback can restore only if no third party has changed the just-written file.
 
 ## Git Profile transaction
 
@@ -73,7 +73,7 @@ Expected rules are generated from enabled Service, Owner, and Repository routes 
 
 Applying a plan captures every affected key's current ordered value set, computes the desired set, creates a safety snapshot, performs exact changes, and re-reads the result. Any remove, add, verification, or related application-config save failure restores the affected keys and configuration and reports apply and rollback errors separately. Plan-external Git keys are not modified.
 
-The plan object does not yet persist the affected values captured when the user first generated the preview. An external change between plan creation and `ApplyPlanAsync` is currently incorporated when apply begins rather than rejected as a stale plan.
+Every generated plan records the exact ordered values for each affected key. `ApplyPlanAsync` compares only those keys before the safety snapshot and again immediately before mutation; a duplicate, order, case, addition, removal, or replacement change rejects the stale plan. Changes to plan-external keys are ignored and are never written or rolled back. Plans that also remove migrated application routes carry the configuration-file token and use conditional save/rollback.
 
 ## Default service routes
 
