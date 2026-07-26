@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using GitKeyRouter.Core.Abstractions;
 using GitKeyRouter.Core.Models;
+using GitKeyRouter.Infrastructure.Configuration;
 
 namespace GitKeyRouter.Infrastructure.Backup;
 
@@ -476,33 +477,14 @@ public sealed class BackupService : IBackupService
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
 
     private static int? TryReadAppConfigSchemaVersion(string text)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(text);
-            return document.RootElement.TryGetProperty("SchemaVersion", out var schemaVersion)
-                ? schemaVersion.GetInt32()
-                : 1;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
+        => AppConfigSchemaReader.TryRead(text);
 
     private static OperationResult ValidateAppConfigForRestore(string text)
     {
         try
         {
             using var document = JsonDocument.Parse(text);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
-            {
-                return OperationResult.Fail("The backup application configuration is not a JSON object.");
-            }
-
-            var schemaVersion = document.RootElement.TryGetProperty("SchemaVersion", out var schemaElement)
-                ? schemaElement.GetInt32()
-                : 1;
+            var schemaVersion = AppConfigSchemaReader.Read(document.RootElement);
             if (schemaVersion < 1)
             {
                 return OperationResult.Fail($"The backup application configuration has invalid schema version {schemaVersion}.");

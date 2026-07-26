@@ -40,9 +40,12 @@ public sealed class JsonAppConfigStore : IAppConfigStore
             try
             {
                 using var document = JsonDocument.Parse(text);
-                var schemaVersion = document.RootElement.TryGetProperty("SchemaVersion", out var schemaElement)
-                    ? schemaElement.GetInt32()
-                    : 1;
+                var schemaVersion = AppConfigSchemaReader.Read(document.RootElement);
+                if (schemaVersion < 1)
+                {
+                    throw new InvalidDataException($"Configuration schema {schemaVersion} is invalid.");
+                }
+
                 if (schemaVersion > AppConfig.CurrentSchemaVersion)
                 {
                     throw new InvalidDataException(

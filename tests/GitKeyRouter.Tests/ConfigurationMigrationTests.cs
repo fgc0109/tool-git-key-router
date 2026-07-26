@@ -9,6 +9,86 @@ namespace GitKeyRouter.Tests;
 public sealed class ConfigurationMigrationTests
 {
     [Fact]
+    public async Task CurrentSchemaWithLowercasePropertyPreservesCurrentConfigurationFields()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        Directory.CreateDirectory(paths.AppDataDirectory);
+        var json = $$"""
+        {
+          "schemaVersion": {{AppConfig.CurrentSchemaVersion}},
+          "UiLanguage": "en-US",
+          "GitServices": [
+            {
+              "Id": "gitea-cloud",
+              "DisplayName": "Gitea Cloud",
+              "ProviderKind": "Gitea",
+              "HostName": "git.policoil.top",
+              "SshPort": 2222,
+              "SshUser": "forge",
+              "WebBaseUrl": "https://git.policoil.top"
+            }
+          ],
+          "Identities": [
+            {
+              "Id": "cloud",
+              "ServiceInstanceId": "gitea-cloud",
+              "DisplayName": "Cloud",
+              "AccountName": "camus",
+              "HostAlias": "gitea-cloud-camus",
+              "PrivateKeyPath": "C:\\keys\\cloud",
+              "PublicKeyPath": "C:\\keys\\cloud.pub"
+            }
+          ],
+          "RepositoryRoutes": [
+            {
+              "Id": "cloud-owner",
+              "ServiceInstanceId": "gitea-cloud",
+              "IdentityId": "cloud",
+              "Scope": "Owner",
+              "NamespacePath": "project-base",
+              "Enabled": true
+            }
+          ],
+          "GitProfiles": [
+            {
+              "Id": "work",
+              "DisplayName": "Work"
+            }
+          ],
+          "GitProfileRules": []
+        }
+        """;
+        await File.WriteAllTextAsync(paths.ConfigPath, json);
+
+        var config = await new JsonAppConfigStore(paths, new PhysicalFileSystem()).LoadAsync();
+
+        Assert.Equal(AppConfig.CurrentSchemaVersion, config.SchemaVersion);
+        var gitea = Assert.Single(config.GitServices, service => service.Id == "gitea-cloud");
+        Assert.Equal(2222, gitea.SshPort);
+        Assert.Equal("forge", gitea.SshUser);
+        Assert.Equal("cloud", Assert.Single(config.Identities).Id);
+        Assert.Equal("project-base", Assert.Single(config.RepositoryRoutes).NamespacePath);
+        Assert.Equal("work", Assert.Single(config.GitProfiles).Id);
+    }
+
+    [Fact]
+    public async Task LowercaseFutureSchemaIsRejectedWithoutModifyingConfiguration()
+    {
+        using var temp = new TemporaryDirectory();
+        var paths = new TestAppPaths(temp.Path);
+        Directory.CreateDirectory(paths.AppDataDirectory);
+        var json = $"{{\"schemaVersion\":{AppConfig.CurrentSchemaVersion + 1},\"GitServices\":[]}}";
+        await File.WriteAllTextAsync(paths.ConfigPath, json);
+        var store = new JsonAppConfigStore(paths, new PhysicalFileSystem());
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => store.LoadAsync());
+
+        Assert.Contains("newer than the supported schema", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(json, await File.ReadAllTextAsync(paths.ConfigPath));
+    }
+
+    [Fact]
     public async Task Schema1Migration_PreservesGitHubSshAndRewriteOutputExactly()
     {
         using var temp = new TemporaryDirectory();

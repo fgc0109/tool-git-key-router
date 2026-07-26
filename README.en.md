@@ -430,7 +430,7 @@ CLI diagnostic exit codes:
 
 ## Configuration upgrades
 
-The current configuration schema is Schema 4. Reading an older configuration preserves all services, identities, key paths, repository routes, and Git Profiles. For non-GitHub services that have a default identity but no service route, normalization derives a service-wide route. Legacy Gitea account-level rewrites are not deleted automatically; they are converted only after user-confirmed migration. GitHub Owner routing remains compatible. A snapshot is still created before modifying configuration.
+The current configuration schema is Schema 4. The `SchemaVersion` property name is read case-insensitively, so forms such as `schemaVersion` are not mistaken for Schema 1; application loading, backup manifests, and restore validation share the same rule. A missing property still migrates as Schema 1, while duplicate, non-integer, invalid, or future values are rejected without modifying the source file. Reading an older configuration preserves all services, identities, key paths, repository routes, and Git Profiles. For non-GitHub services that have a default identity but no service route, normalization derives a service-wide route. Legacy Gitea account-level rewrites are not deleted automatically; they are converted only after user-confirmed migration. GitHub Owner routing remains compatible. A snapshot is still created before modifying configuration.
 
 ## Input validation
 

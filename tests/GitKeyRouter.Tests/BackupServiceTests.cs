@@ -89,7 +89,7 @@ public sealed class BackupServiceTests
         git.Rules.Add(originalRule);
         Directory.CreateDirectory(paths.AppDataDirectory);
         Directory.CreateDirectory(paths.SshDirectory);
-        const string originalConfig = "{\"SchemaVersion\":3,\"GitServices\":[],\"Identities\":[],\"RepositoryRoutes\":[],\"GitProfiles\":[],\"GitProfileRules\":[]}";
+        const string originalConfig = "{\"schemaVersion\":3,\"GitServices\":[],\"Identities\":[],\"RepositoryRoutes\":[],\"GitProfiles\":[],\"GitProfileRules\":[]}";
         await File.WriteAllTextAsync(paths.ConfigPath, originalConfig);
         await File.WriteAllTextAsync(paths.SshConfigPath, "# original ssh config");
         var service = new BackupService(paths, fileSystem, git, new TestClock());
@@ -134,7 +134,7 @@ public sealed class BackupServiceTests
         await File.WriteAllTextAsync(
             Path.Combine(backupDirectory, "manifest.json"),
             "{\"SchemaVersion\":1,\"BackupDirectory\":\"future\",\"CreatedAt\":\"2026-07-18T00:00:00Z\",\"Reason\":\"future\",\"AppConfigExisted\":true,\"AppConfigSchemaVersion\":99,\"SshConfigExisted\":false,\"GitRewriteCaptureSucceeded\":true,\"GitRewriteCount\":0}");
-        await File.WriteAllTextAsync(Path.Combine(backupDirectory, "app_config.json"), "{\"SchemaVersion\":99}");
+        await File.WriteAllTextAsync(Path.Combine(backupDirectory, "app_config.json"), "{\"schemaVersion\":99}");
         await File.WriteAllTextAsync(Path.Combine(backupDirectory, "git_url_rewrites.json"), "[]");
         var service = new BackupService(paths, fileSystem, new FakeGitUrlRewriteStore(), new TestClock());
 
