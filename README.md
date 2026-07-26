@@ -2,6 +2,8 @@
 
 [English](README.en.md) | **简体中文**
 
+[项目主页](https://project-base-mirror.github.io/tool-git-key-router/) · [下载最新版](https://github.com/project-base-mirror/tool-git-key-router/releases/latest)
+
 > **协作说明**
 >
 > GitKeyRouter 的大量架构设计、代码实现、测试、文档和发布流程由项目作者与 ChatGPT（OpenAI）协作完成。项目作者负责提出需求、确定产品方向、审阅与验收变更，并对最终设计决策、运行和发布负责。

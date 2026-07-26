@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="g" cx="80%" cy="15%" r="70%"><stop stop-color="#124b4a"/><stop offset="1" stop-color="#07111f"/></radialGradient>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse"><path d="M64 0H0V64" fill="none" stroke="#8ba8c7" stroke-opacity=".08"/></pattern>
+  </defs>
+  <rect width="1200" height="630" fill="url(#g)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <g transform="translate(94 105)" fill="none" stroke="#3ee6b0" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0 48h74m0 0-24-24m24 24-24 24"/><circle cx="3" cy="48" r="16"/><path d="M74 0h34v96H74"/>
+  </g>
+  <text x="94" y="292" fill="#eaf2ff" font-family="Segoe UI,Microsoft YaHei UI,sans-serif" font-size="82" font-weight="700" letter-spacing="-3">GitKeyRouter</text>
+  <text x="98" y="382" fill="#3ee6b0" font-family="Segoe UI,Microsoft YaHei UI,sans-serif" font-size="45" font-weight="600">让每个仓库自动用对 SSH 身份</text>
+  <text x="98" y="462" fill="#93a7bd" font-family="Segoe UI,Microsoft YaHei UI,sans-serif" font-size="25">多 Git 服务 · 多身份路由 · 安全预览 · 崩溃恢复</text>
+</svg>

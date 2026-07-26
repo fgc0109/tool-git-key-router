@@ -2,6 +2,8 @@
 
 **English** | [简体中文](README.md)
 
+[Project website](https://project-base-mirror.github.io/tool-git-key-router/) · [Download latest release](https://github.com/project-base-mirror/tool-git-key-router/releases/latest)
+
 > **Collaboration note**
 >
 > A substantial part of GitKeyRouter's architecture, implementation, tests, documentation, and release workflow was developed collaboratively by the project author and ChatGPT (OpenAI). The project author defines requirements and product direction, reviews and accepts changes, and remains responsible for final design decisions, operation, and releases.
