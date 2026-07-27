@@ -4,9 +4,9 @@ namespace GitKeyRouter.App.Presentation;
 
 internal static class AppIcon
 {
-    private const string ResourceName = "GitKeyRouter.App.Assets.GitKeyRouter.ico";
+    internal const string ResourceName = "GitKeyRouter.App.Assets.GitKeyRouter.ico";
 
-    public static Icon Load()
+    public static Icon LoadWindowIcon()
     {
         using var stream = typeof(AppIcon).Assembly.GetManifestResourceStream(ResourceName)
             ?? throw new InvalidOperationException(

@@ -396,9 +396,7 @@ public sealed class WinFormsSmokeTests
 
             Assert.NotNull(main.Icon);
             using var bitmap = main.Icon.ToBitmap();
-            Assert.True(
-                ContainsMintAccent(bitmap),
-                "The main-window icon did not contain the branded mint route accent.");
+            IconAssertions.AssertGitRouterMark(bitmap);
         });
 
     [Fact]
@@ -414,23 +412,6 @@ public sealed class WinFormsSmokeTests
         first.Dispose();
         using var third = SingleInstanceGuard.TryAcquire(mutexName);
         Assert.True(third.IsPrimaryInstance);
-    }
-
-    private static bool ContainsMintAccent(Bitmap bitmap)
-    {
-        for (var y = 0; y < bitmap.Height; y++)
-        {
-            for (var x = 0; x < bitmap.Width; x++)
-            {
-                var pixel = bitmap.GetPixel(x, y);
-                if (pixel.A > 0 && pixel.R < 140 && pixel.G > 150 && pixel.B > 90)
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     private static void Exercise(Control control, params Size[] sizes)

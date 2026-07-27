@@ -36,7 +36,7 @@ public sealed class MainForm : Form
     public MainForm(ApplicationServices services)
     {
         _services = services;
-        Icon = AppIcon.Load();
+        Icon = AppIcon.LoadWindowIcon();
         Text = $"GitKeyRouter {DisplayVersion}";
         StartPosition = FormStartPosition.CenterScreen;
         Width = 1280;

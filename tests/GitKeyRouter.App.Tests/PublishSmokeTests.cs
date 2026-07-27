@@ -238,9 +238,7 @@ public sealed class PublishSmokeTests
                 {
                     Assert.NotNull(publishedIcon);
                     using var iconBitmap = publishedIcon.ToBitmap();
-                    Assert.True(
-                        ContainsMintAccent(iconBitmap),
-                        "Published EXE did not expose the branded mint route accent.");
+                    IconAssertions.AssertGitRouterMark(iconBitmap);
                 }
 
                 var versionResult = await RunProcessAsync(
@@ -358,9 +356,7 @@ public sealed class PublishSmokeTests
             {
                 Assert.NotNull(publishedIcon);
                 using var iconBitmap = publishedIcon.ToBitmap();
-                Assert.True(
-                    ContainsMintAccent(iconBitmap),
-                    "Published EXE did not expose the branded mint route accent.");
+                IconAssertions.AssertGitRouterMark(iconBitmap);
             }
 
             var validationResult = await RunProcessAsync(
@@ -515,23 +511,6 @@ public sealed class PublishSmokeTests
         }
 
         throw new DirectoryNotFoundException("Could not locate the GitKeyRouter repository root.");
-    }
-
-    private static bool ContainsMintAccent(Bitmap bitmap)
-    {
-        for (var y = 0; y < bitmap.Height; y++)
-        {
-            for (var x = 0; x < bitmap.Width; x++)
-            {
-                var pixel = bitmap.GetPixel(x, y);
-                if (pixel.A > 0 && pixel.R < 140 && pixel.G > 150 && pixel.B > 90)
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     private static async Task<ProcessResult> RunProcessAsync(
