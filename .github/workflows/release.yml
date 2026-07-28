@@ -44,7 +44,6 @@ jobs:
         shell: pwsh
         env:
           DISPATCH_TAG: ${{ inputs.tag }}
-          EVENT_BEFORE: ${{ github.event.before }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -55,13 +54,7 @@ jobs:
               $tag = $env:DISPATCH_TAG
           }
           else {
-              $before = $env:EVENT_BEFORE
-              if ([string]::IsNullOrWhiteSpace($before) -or $before -match '^0+$') {
-                  $changedFiles = @(git diff-tree --no-commit-id --name-only -r $env:GITHUB_SHA)
-              }
-              else {
-                  $changedFiles = @(git diff --name-only $before $env:GITHUB_SHA)
-              }
+              $changedFiles = @(git diff-tree --no-commit-id --name-only -r $env:GITHUB_SHA)
 
               $releaseFiles = @($changedFiles | Where-Object {
                   $_ -match '^\.github/releases/v[^/]+\.md$'

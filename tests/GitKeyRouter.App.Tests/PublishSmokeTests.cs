@@ -145,6 +145,11 @@ public sealed class PublishSmokeTests
         Assert.Contains("--locked-mode", releaseWorkflow, StringComparison.Ordinal);
         Assert.Contains("NuGetLockFilePath=packages.publish-win-x64.lock.json", releaseWorkflow, StringComparison.Ordinal);
         Assert.Contains("PublishSingleFile=true", releaseWorkflow, StringComparison.Ordinal);
+        Assert.Contains("git diff-tree --no-commit-id --name-only -r $env:GITHUB_SHA", releaseWorkflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("EVENT_BEFORE", releaseWorkflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("git diff --name-only $before $env:GITHUB_SHA", releaseWorkflow, StringComparison.Ordinal);
+        Assert.Contains("actions/upload-artifact@v7", releaseWorkflow, StringComparison.Ordinal);
+        Assert.Contains("Expected exactly one changed release note file", releaseWorkflow, StringComparison.Ordinal);
         Assert.Contains("--locked-mode", publishScript, StringComparison.Ordinal);
         Assert.Contains("NuGetLockFilePath=packages.publish-win-x64.lock.json", publishScript, StringComparison.Ordinal);
         Assert.Contains("PublishSingleFile=true", publishScript, StringComparison.Ordinal);
