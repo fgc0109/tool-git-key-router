@@ -7,7 +7,7 @@ using GitKeyRouter.Core.Validation;
 
 namespace GitKeyRouter.Core.Services;
 
-public sealed class GitProfileService
+public sealed class GitProfileService : IGitProfileMaterializer
 {
     private const string MasterFileName = "profiles.gitconfig";
     private const string TransactionManifestFileName = "transaction.json";
@@ -48,6 +48,18 @@ public sealed class GitProfileService
     public string MasterConfigPath => Path.Combine(ProfilesDirectory, MasterFileName);
 
     public string TransactionRootDirectory => Path.Combine(_paths.AppDataDirectory, "git-profile-transactions");
+
+    public async Task<OperationResult> ApplyCurrentAsync(CancellationToken cancellationToken = default)
+    {
+        var preview = await BuildPreviewAsync(cancellationToken).ConfigureAwait(false);
+        var result = await ApplyAsync(preview, cancellationToken).ConfigureAwait(false);
+        if (!result.Success)
+        {
+            return OperationResult.Fail(result.Message, result.Errors.ToArray());
+        }
+
+        return OperationResult.Ok(result.Message);
+    }
 
     public async Task<OperationResult> RecoverInterruptedTransactionsAsync(
         CancellationToken cancellationToken = default)

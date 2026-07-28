@@ -75,6 +75,44 @@ public sealed class PhysicalFileSystem : IFileSystem
         }
     }
 
+    public async Task WriteAllBytesAtomicAsync(
+        string path,
+        byte[] content,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException($"Cannot determine the parent directory of '{path}'.");
+        Directory.CreateDirectory(directory);
+
+        var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await File.WriteAllBytesAsync(temporaryPath, content, cancellationToken).ConfigureAwait(false);
+            await using (var stream = new FileStream(temporaryPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                stream.Flush(true);
+            }
+
+            if (File.Exists(path))
+            {
+                File.Move(temporaryPath, path, true);
+            }
+            else
+            {
+                File.Move(temporaryPath, path);
+            }
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
     public void CopyFile(string sourcePath, string destinationPath, bool overwrite)
     {
         var directory = Path.GetDirectoryName(destinationPath);

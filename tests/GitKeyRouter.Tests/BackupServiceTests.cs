@@ -431,6 +431,12 @@ public sealed class BackupServiceTests
             return _inner.WriteAllTextAtomicAsync(path, content, cancellationToken);
         }
 
+        public Task WriteAllBytesAtomicAsync(
+            string path,
+            byte[] content,
+            CancellationToken cancellationToken = default)
+            => _inner.WriteAllBytesAtomicAsync(path, content, cancellationToken);
+
         public void CopyFile(string sourcePath, string destinationPath, bool overwrite)
             => _inner.CopyFile(sourcePath, destinationPath, overwrite);
 

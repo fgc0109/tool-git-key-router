@@ -64,3 +64,39 @@ Git rewrite restore removes and re-adds exact rewrite pairs through Git. It neve
 Git rewrite restore captures the pre-restore rule set. If applying the selected snapshot fails, it attempts to restore the pre-restore rules and verifies the final exact set. Apply and rollback failures are reported separately.
 
 The legacy convenience file `%USERPROFILE%\.ssh\config.gitkeyrouter.bak` is refreshed immediately before an SSH Config write. Timestamped snapshot directories and their integrity metadata remain the authoritative recovery history.
+
+## Portable encrypted backup
+
+The Backup and Restore page can export a `.gkrbackup` package for complete migration to another computer. This is separate from timestamped local snapshots.
+
+The encrypted payload contains:
+
+- The normalized application configuration, including services, identities, routes, Git Profiles, profile rules, and UI language.
+- The user's SSH Config when present.
+- The exact Git URL rewrite pairs.
+- The bytes of every private and public key referenced by an identity, together with identity ownership and SHA-256 metadata.
+
+Export fails rather than publishing an incomplete package when a configured key file is missing or exceeds the safety limits.
+
+### Encryption and validation
+
+Portable packages use PBKDF2-HMAC-SHA256 with a random salt and 210,000 iterations to derive an AES-256 key. AES-GCM encrypts and authenticates the complete payload with a random nonce and a 128-bit authentication tag. The password is never stored.
+
+Import decrypts and validates the entire package before changing local state. Validation covers:
+
+- Envelope format, version, algorithms, and bounded key-derivation parameters.
+- AES-GCM authentication, so an incorrect password or modified package is rejected.
+- Supported application and portable-payload schema versions.
+- Unique identity/key ownership.
+- Per-key size, aggregate size, Base64 encoding, and SHA-256.
+- Presence of every configured private and public key.
+
+### Cross-computer path mapping and rollback
+
+Imported key paths are never reused from the source computer. Each identity receives a deterministic subdirectory under `%USERPROFILE%\.ssh\GitKeyRouter`; the application configuration and matching SSH Config path references are rewritten to those target paths.
+
+Before mutation, GitKeyRouter captures the exact current application configuration, SSH Config, Git rewrites, destination-key existence/content, and a normal timestamped safety snapshot. Import then writes keys atomically, saves the remapped configuration, restores SSH Config and Git rewrites, and regenerates Git Profile files through their transactional apply mechanism.
+
+If any step fails or is cancelled after mutation starts, GitKeyRouter restores the original key files, application configuration, SSH Config, Git rewrites, and Git Profile files. Apply and rollback failures are reported separately.
+
+Portable packages contain private keys. Store them only in trusted locations, use a strong unique password, and transfer them through a protected channel.

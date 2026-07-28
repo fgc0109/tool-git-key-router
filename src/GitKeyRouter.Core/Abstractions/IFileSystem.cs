@@ -22,6 +22,8 @@ public interface IFileSystem
 
     Task WriteAllTextAtomicAsync(string path, string content, CancellationToken cancellationToken = default);
 
+    Task WriteAllBytesAtomicAsync(string path, byte[] content, CancellationToken cancellationToken = default);
+
     void CopyFile(string sourcePath, string destinationPath, bool overwrite);
 
     void MoveFile(string sourcePath, string destinationPath, bool overwrite);

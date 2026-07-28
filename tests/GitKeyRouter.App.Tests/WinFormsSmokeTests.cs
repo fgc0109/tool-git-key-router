@@ -97,6 +97,8 @@ public sealed class WinFormsSmokeTests
             Exercise(new CommandResultForm("Result", "output"));
             Exercise(new TextViewForm("View", "content"));
             Exercise(new TextViewForm("Edit", "content", editable: true));
+            Exercise(new PortableBackupPasswordForm(confirmPassword: false));
+            Exercise(new PortableBackupPasswordForm(confirmPassword: true));
         });
 
     [Fact]
@@ -135,6 +137,31 @@ public sealed class WinFormsSmokeTests
             }
 
             Exercise(new MainForm(services), new Size(1024, 680), new Size(1280, 820));
+        });
+
+    [Fact]
+    public void BackupPageExposesPortableEncryptedImportAndExport()
+        => StaTest.Run(() =>
+        {
+            var services = AppBootstrapper.CreateServices();
+            using var page = new BackupControl(services, _ => { });
+            _ = page.Handle;
+
+            Assert.Single(
+                Descendants<Button>(page),
+                button => button.Name == "ExportPortableBackupButton");
+            Assert.Single(
+                Descendants<Button>(page),
+                button => button.Name == "ImportPortableBackupButton");
+
+            using var password = new PortableBackupPasswordForm(confirmPassword: true);
+            _ = password.Handle;
+            Assert.Single(
+                Descendants<TextBox>(password),
+                textBox => textBox.Name == "PortableBackupPasswordTextBox" && textBox.UseSystemPasswordChar);
+            Assert.Single(
+                Descendants<TextBox>(password),
+                textBox => textBox.Name == "PortableBackupPasswordConfirmTextBox" && textBox.UseSystemPasswordChar);
         });
 
     [Fact]

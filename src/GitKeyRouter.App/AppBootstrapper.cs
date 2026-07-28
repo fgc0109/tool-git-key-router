@@ -42,6 +42,14 @@ public static class AppBootstrapper
             paths,
             processRunner,
             toolchainService);
+        IPortableBackupService portableBackupService = new PortableBackupService(
+            paths,
+            fileSystem,
+            configStore,
+            gitStore,
+            backupService,
+            gitProfileService,
+            clock);
         var ownerRouteService = new OwnerRouteService(configStore, backupService, gitProviderAdapters);
         var gitUrlRewriteService = new GitUrlRewriteService(
             configStore,
@@ -79,6 +87,7 @@ public static class AppBootstrapper
             ToolchainService = toolchainService,
             RequiredToolInstallerService = requiredToolInstallerService,
             BackupService = backupService,
+            PortableBackupService = portableBackupService,
             GitProviderAdapters = gitProviderAdapters,
             GitServiceService = gitServiceService,
             GitProfileService = gitProfileService,

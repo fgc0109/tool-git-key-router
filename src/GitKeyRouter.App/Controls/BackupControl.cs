@@ -20,12 +20,22 @@ public sealed class BackupControl : UserControl, IAsyncRefreshable
         _status = status;
         var header = UiHelpers.CreatePageHeader(
             AppLocalization.T("备份与恢复", "Backup and Restore"),
-            AppLocalization.T("检查备份健康状态，并按需恢复或安全清理", "Inspect backup health, restore valid snapshots, and safely clean invalid entries"),
+            AppLocalization.T("本机快照与跨电脑加密迁移", "Local snapshots and encrypted cross-computer transfer"),
             AppLocalization.T(
-                "GitKeyRouter 在重要写入前会自动创建快照，也可以手动创建。\r\n\r\n• 列表会检查 manifest 和文件完整性并显示健康状态。\r\n• 只有完整备份可以查看内容或恢复。\r\n• 异常目录必须先预览，再确认清理。\r\n• 活动或近期 pending、完整备份和重解析点不会被清理。",
-                "GitKeyRouter creates snapshots before important writes, and you can also create them manually.\r\n\r\n• The list verifies manifests and recorded file integrity.\r\n• Only complete snapshots can be viewed or restored.\r\n• Invalid directories require a cleanup preview and confirmation.\r\n• Active/recent pending directories, complete snapshots, and reparse points are protected."));
+                "本机快照用于细粒度恢复。便携备份包使用口令加密，可将全部程序设置、SSH Config、Git rewrite 以及身份引用的私钥和公钥迁移到另一台电脑。\r\n\r\n• 导入前会验证口令、认证标签、结构、密钥 SHA-256 和配置版本。\r\n• 密钥会安全重映射到目标电脑的 .ssh\\GitKeyRouter 目录。\r\n• 导入失败时会自动恢复原配置、SSH、Git rewrite、密钥和 Git Profile 文件。\r\n• 便携备份包含私钥；请使用强口令并妥善保管。",
+                "Local snapshots support granular recovery. Password-encrypted portable packages transfer all application settings, SSH Config, Git rewrites, and every referenced private/public key to another computer.\r\n\r\n• Import verifies the password, authentication tag, structure, key SHA-256 values, and configuration version before mutation.\r\n• Keys are safely remapped under the target computer's .ssh\\GitKeyRouter directory.\r\n• A failed import automatically restores configuration, SSH, Git rewrites, keys, and Git Profile files.\r\n• Portable packages contain private keys; use a strong password and protect the file."));
         var toolbar = UiHelpers.CreateToolbar();
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("立即创建快照", "Create snapshot now"), async (_, _) => await CreateSnapshotAsync()));
+        var exportPortable = UiHelpers.Button(
+            AppLocalization.T("导出完整加密备份", "Export complete encrypted backup"),
+            async (_, _) => await ExportPortableAsync());
+        exportPortable.Name = "ExportPortableBackupButton";
+        toolbar.Controls.Add(exportPortable);
+        var importPortable = UiHelpers.Button(
+            AppLocalization.T("导入完整加密备份", "Import complete encrypted backup"),
+            async (_, _) => await ImportPortableAsync());
+        importPortable.Name = "ImportPortableBackupButton";
+        toolbar.Controls.Add(importPortable);
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("查看内容", "View contents"), async (_, _) => await ViewAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("恢复 SSH Config", "Restore SSH Config"), async (_, _) => await RestoreSshAsync()));
         toolbar.Controls.Add(UiHelpers.Button(AppLocalization.T("恢复 Git rewrite", "Restore Git rewrites"), async (_, _) => await RestoreGitAsync()));
@@ -64,6 +74,95 @@ public sealed class BackupControl : UserControl, IAsyncRefreshable
         var manifest = await _services.BackupService.CreateSnapshotAsync("Manual backup");
         _status($"已创建备份：{manifest.BackupDirectory}");
         await RefreshAsync();
+    }
+
+    private async Task ExportPortableAsync()
+    {
+        using var destination = new SaveFileDialog
+        {
+            Title = AppLocalization.T("导出完整加密备份", "Export complete encrypted backup"),
+            Filter = "GitKeyRouter portable backup (*.gkrbackup)|*.gkrbackup|All files (*.*)|*.*",
+            DefaultExt = "gkrbackup",
+            AddExtension = true,
+            FileName = $"GitKeyRouter-{DateTime.Now:yyyyMMdd-HHmmss}.gkrbackup"
+        };
+        if (destination.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        using var password = new PortableBackupPasswordForm(confirmPassword: true);
+        if (password.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        var result = await _services.PortableBackupService.ExportAsync(destination.FileName, password.Password);
+        if (!result.Success || result.Value is null)
+        {
+            UiHelpers.ShowErrors(this, result);
+            return;
+        }
+
+        var message = AppLocalization.T(
+            $"完整加密备份已导出。\r\n\r\n{result.Value.Summary}\r\n\r\n文件：{destination.FileName}",
+            $"Complete encrypted backup exported.\r\n\r\n{result.Value.Summary}\r\n\r\nFile: {destination.FileName}");
+        MessageBox.Show(this, message, "GitKeyRouter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        _status(result.Message);
+    }
+
+    private async Task ImportPortableAsync()
+    {
+        using var source = new OpenFileDialog
+        {
+            Title = AppLocalization.T("导入完整加密备份", "Import complete encrypted backup"),
+            Filter = "GitKeyRouter portable backup (*.gkrbackup)|*.gkrbackup|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (source.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        using var password = new PortableBackupPasswordForm(confirmPassword: false);
+        if (password.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        var preview = await _services.PortableBackupService.InspectAsync(source.FileName, password.Password);
+        if (!preview.Success || preview.Value is null)
+        {
+            UiHelpers.ShowErrors(this, preview);
+            return;
+        }
+
+        var confirmation = AppLocalization.T(
+            $"已验证加密备份：\r\n{preview.Value.Summary}\r\n\r\n继续后将替换当前程序设置、SSH Config、Git rewrite 和 Git Profile 文件，并把备份中的密钥写入本机托管目录。发生错误时会自动回滚。\r\n\r\n是否继续？",
+            $"Encrypted backup verified:\r\n{preview.Value.Summary}\r\n\r\nContinuing replaces current application settings, SSH Config, Git rewrites, and Git Profile files, and writes the packaged keys into the managed local directory. Errors trigger automatic rollback.\r\n\r\nContinue?");
+        if (MessageBox.Show(
+                this,
+                confirmation,
+                AppLocalization.T("确认完整导入", "Confirm complete import"),
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        var result = await _services.PortableBackupService.ImportAsync(source.FileName, password.Password);
+        if (!result.Success || result.Value is null)
+        {
+            UiHelpers.ShowErrors(this, result);
+            return;
+        }
+
+        var message = AppLocalization.T(
+            $"完整备份已导入。\r\n\r\n身份：{result.Value.IdentityCount}\r\n密钥文件：{result.Value.KeyFileCount}\r\nGit rewrite：{result.Value.GitRewriteCount}\r\n密钥目录：{result.Value.ManagedKeyDirectory}\r\n\r\n请刷新各页面；为确保所有视图重新加载，建议重启 GitKeyRouter。",
+            $"Complete backup imported.\r\n\r\nIdentities: {result.Value.IdentityCount}\r\nKey files: {result.Value.KeyFileCount}\r\nGit rewrites: {result.Value.GitRewriteCount}\r\nKey directory: {result.Value.ManagedKeyDirectory}\r\n\r\nRefresh the pages; restarting GitKeyRouter is recommended so every view reloads the imported state.");
+        MessageBox.Show(this, message, "GitKeyRouter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        _status(result.Message);
     }
 
     private async Task ViewAsync()
