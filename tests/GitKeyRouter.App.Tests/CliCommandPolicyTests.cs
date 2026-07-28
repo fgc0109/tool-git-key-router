@@ -28,6 +28,9 @@ public sealed class CliCommandPolicyTests
     [InlineData("test-service")]
     [InlineData("test-route")]
     [InlineData("test-ssh")]
+    [InlineData("gh-login")]
+    [InlineData("gh-status")]
+    [InlineData("gh")]
     [InlineData("apply")]
     [InlineData("apply-profiles")]
     public void ReadOnlyAndPreviewCommandsDoNotTakeExclusiveInstanceLock(string command)

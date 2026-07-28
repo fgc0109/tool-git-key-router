@@ -16,9 +16,10 @@ GitKeyRouter is a local desktop application for Windows 10 and Windows 11 that c
 - Default-identity fallback routing for each Git service plus precise Owner / Repository routing through global `url.*.insteadOf` Git configuration
 - Git Profiles that automatically select `user.name`, `user.email`, and signing keys by directory or remote URL
 - Diffs, command output, backups, and selective restore before configuration changes
+- GitHub CLI API identity isolation and selection from the repository SSH HostAlias
 - A WinForms GUI and a simple CLI that can also be invoked by DevRunner
 
-The project uses C#, .NET 10, and WinForms. It does not use a database, WebView, Node.js, Electron, the GitHub API, OAuth, or PATs.
+The project uses C#, .NET 10, and WinForms without a database, WebView, Node.js, or Electron. Core Git/SSH routing does not call hosting-provider APIs. The optional GitHub CLI wrapper only launches the user-installed `gh.exe`; GitHub CLI and the operating system own OAuth login and credential storage, and GitKeyRouter never handles the token.
 
 > The target framework is .NET 10. Release builds and automated tests are validated on Windows. Before publishing, it is still recommended to run `dotnet build --configuration Release` and `dotnet test --configuration Release` on the target machine.
 
@@ -146,7 +147,7 @@ The application never displays private-key contents. When an OpenSSH or PEM priv
 
 Open the SSH Keys page for the relevant Git service account, create a new key, and use **Copy public key** on the key variant marked as OpenSSH. RFC4716, PEM, private-key, malformed Base64, and structurally invalid text are not copied by this action.
 
-GitKeyRouter does not call the GitHub, GitLab, or Gitea API and does not upload public keys on the user's behalf.
+GitKeyRouter's key-management features do not call the GitHub, GitLab, or Gitea API and do not upload public keys on the user's behalf. The optional `gh` wrapper only forwards GitHub CLI operations and does not participate in public-key upload or token management.
 
 ### 5. Synchronize SSH Config
 
@@ -373,6 +374,11 @@ GitKeyRouter.exe test-route camus0109 --url https://github.com/camus0109/panel-t
 GitKeyRouter.exe test-route camus0109 --url https://github.com/camus0109/panel-terraria.git --connect
 GitKeyRouter.exe test-ssh github-camus
 GitKeyRouter.exe test-ssh github-camus --verbose
+GitKeyRouter.exe gh-login github-camus
+GitKeyRouter.exe gh-status github-camus
+GitKeyRouter.exe gh -- release view
+GitKeyRouter.exe gh --identity github-camus -- release create v1.0.0
+GitKeyRouter.exe gh -- release create v1.0.0 -R camus0109/example
 GitKeyRouter.exe version
 GitKeyRouter.exe help
 ```
@@ -382,6 +388,33 @@ GitKeyRouter.exe help
 The GUI and `apply --yes` / `apply-profiles --yes` share the exclusive lock to prevent cross-process writes. Other CLI commands do not acquire it. `version` / `--version` and `help` / `--help` return before configuration loading or application-service construction, so scripts and release validation can use them while the GUI is running.
 
 `test-route --connect` also requires a real `--url`, preventing the application from sending network requests for an invented repository.
+
+### GitHub CLI multi-account routing
+
+`gh-login` gives each GitHub identity a separate
+`%APPDATA%\GitKeyRouter\github-cli\<identity-id-hash>\` directory and forces browser login.
+After login, GitKeyRouter runs `gh api user --jq .login` in the same `GH_CONFIG_DIR` and
+requires the returned login to match the identity's `AccountName`. `gh-status` performs the
+same verification.
+
+`gh -- ...` selects an identity in this order: explicit `--identity`, forwarded `-R/--repo`,
+the current branch's tracking remote, `remote.pushDefault`, then `origin`. Automatic mode
+reads Git's expanded push URL and requires the selected remote to use a configured SSH
+HostAlias. Execution is refused when remotes select different identities, the HostAlias
+disagrees with the repository route, or no unique identity can be determined.
+
+The wrapper requires GitHub CLI 2.40.0 or later, sets the target `GH_CONFIG_DIR`, `GH_HOST`,
+and resolved `GH_REPO` (or removes it when there is no repository context), and removes `GH_TOKEN`,
+`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` from the child process.
+It never calls global `gh auth switch`, and GitKeyRouter does not log forwarded arguments or
+output. Wrapped `gh auth`, `gh config`, `gh alias`, and user-supplied `--hostname` are blocked;
+use `gh-login` for account setup. If `hosts.yml` contains a plaintext `oauth_token` key, the
+identity is blocked and the token value is never printed.
+
+GitHub CLI configuration and credentials are excluded from GitKeyRouter configuration,
+snapshots, and portable backups. Run `gh-login` again for each identity after restore or
+migration; GitHub CLI and the operating system's secure credential store remain responsible
+for the credential.
 
 CLI diagnostic exit codes:
 

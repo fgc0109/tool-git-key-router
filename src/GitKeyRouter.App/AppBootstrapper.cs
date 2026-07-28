@@ -4,6 +4,7 @@ using GitKeyRouter.Infrastructure.Backup;
 using GitKeyRouter.Infrastructure.Configuration;
 using GitKeyRouter.Infrastructure.FileSystem;
 using GitKeyRouter.Infrastructure.Git;
+using GitKeyRouter.Infrastructure.GitHub;
 using GitKeyRouter.Infrastructure.Logging;
 using GitKeyRouter.Infrastructure.ProcessExecution;
 
@@ -56,6 +57,11 @@ public static class AppBootstrapper
             gitStore,
             backupService,
             gitProviderAdapters);
+        var gitHubCliService = new GitHubCliService(
+            configStore,
+            paths,
+            processRunner,
+            toolchainService);
         var sshKeyService = new SshKeyService(
             fileSystem,
             processRunner,
@@ -97,6 +103,7 @@ public static class AppBootstrapper
             SshKeyRenameService = sshKeyRenameService,
             SshConfigService = sshConfigService,
             GitUrlRewriteService = gitUrlRewriteService,
+            GitHubCliService = gitHubCliService,
             DiagnosticService = diagnosticService,
             Logger = logger
         };

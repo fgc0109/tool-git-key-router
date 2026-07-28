@@ -190,12 +190,21 @@ internal sealed class FixedToolchainService : IToolchainService
     private readonly string _gitPath;
     private readonly string? _sshKeygenPath;
     private readonly string? _sshPath;
+    private readonly string? _ghPath;
+    private readonly string? _ghVersion;
 
-    public FixedToolchainService(string gitPath, string? sshKeygenPath = null, string? sshPath = null)
+    public FixedToolchainService(
+        string gitPath,
+        string? sshKeygenPath = null,
+        string? sshPath = null,
+        string? ghPath = null,
+        string? ghVersion = "gh version 2.96.0 (test)")
     {
         _gitPath = gitPath;
         _sshKeygenPath = sshKeygenPath;
         _sshPath = sshPath;
+        _ghPath = ghPath;
+        _ghVersion = ghVersion;
     }
 
     public Task<ToolchainInfo> InspectAsync(CancellationToken cancellationToken = default)
@@ -213,6 +222,13 @@ internal sealed class FixedToolchainService : IToolchainService
                 Name = "ssh-keygen.exe",
                 Exists = !string.IsNullOrWhiteSpace(_sshKeygenPath),
                 SelectedPath = _sshKeygenPath
+            },
+            Gh = new ExecutableInfo
+            {
+                Name = "gh.exe",
+                Exists = !string.IsNullOrWhiteSpace(_ghPath),
+                SelectedPath = _ghPath,
+                Version = _ghVersion
             }
         });
 }

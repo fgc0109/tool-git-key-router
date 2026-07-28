@@ -24,4 +24,6 @@ public sealed class ToolchainInfo
     public required ExecutableInfo SshKeygen { get; init; }
 
     public ExecutableInfo Winget { get; init; } = new() { Name = "winget.exe", Exists = false };
+
+    public ExecutableInfo Gh { get; init; } = new() { Name = "gh.exe", Exists = false };
 }

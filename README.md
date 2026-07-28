@@ -16,9 +16,10 @@ GitKeyRouter 是一个面向 Windows 10 / Windows 11 的本地桌面工具，用
 - 各 Git 服务的默认身份回退路由，以及 Owner / Repository 精确路由的 `url.*.insteadOf` 全局 Git 配置
 - 按目录或远程 URL 自动选择 `user.name`、`user.email` 和签名密钥的 Git Profiles
 - 配置修改前的 diff、命令输出、备份和选择性恢复
+- 根据仓库 SSH HostAlias 隔离并选择 GitHub CLI API 身份
 - GUI 与 DevRunner 可调用的简单 CLI
 
-项目使用 C#、.NET 10 和 WinForms，不使用数据库、WebView、Node.js、Electron、GitHub API、OAuth 或 PAT。
+项目使用 C#、.NET 10 和 WinForms，不使用数据库、WebView、Node.js 或 Electron。核心 Git/SSH 路由不调用托管平台 API；可选的 GitHub CLI 包装功能只启动用户安装的 `gh.exe`，OAuth 登录和凭据存储均由 GitHub CLI 与操作系统负责，GitKeyRouter 不接触 Token。
 
 > 项目目标框架为 .NET 10，并在 Windows 环境通过 Release 构建和自动化测试验证。发布前仍建议在目标机器执行 `dotnet build --configuration Release` 和 `dotnet test --configuration Release`。
 
@@ -146,7 +147,7 @@ id_ed25519_account.pem.pub         # PEM / PKCS8
 
 在对应 Git 服务账户中打开 SSH Keys 页面，创建新 Key，并使用“复制公钥”复制标记为 OpenSSH 格式的公钥。RFC4716、PEM、私钥或结构损坏的文本不会被该按钮复制。
 
-GitKeyRouter 不调用 GitHub、GitLab 或 Gitea API，也不会替用户上传公钥。
+GitKeyRouter 的密钥管理功能不调用 GitHub、GitLab 或 Gitea API，也不会替用户上传公钥。可选的 `gh` 包装命令只转发 GitHub CLI 操作，不参与公钥上传或 Token 管理。
 
 ### 5. 同步 SSH Config
 
@@ -377,6 +378,11 @@ GitKeyRouter.exe test-route camus0109 --url https://github.com/camus0109/panel-t
 GitKeyRouter.exe test-route camus0109 --url https://github.com/camus0109/panel-terraria.git --connect
 GitKeyRouter.exe test-ssh github-camus
 GitKeyRouter.exe test-ssh github-camus --verbose
+GitKeyRouter.exe gh-login github-camus
+GitKeyRouter.exe gh-status github-camus
+GitKeyRouter.exe gh -- release view
+GitKeyRouter.exe gh --identity github-camus -- release create v1.0.0
+GitKeyRouter.exe gh -- release create v1.0.0 -R camus0109/example
 GitKeyRouter.exe version
 GitKeyRouter.exe help
 ```
@@ -388,6 +394,30 @@ GitKeyRouter.exe help
 GUI 与带 `--yes` 的 `apply` / `apply-profiles` 共享排他锁，防止跨进程并发写入。其余 CLI 命令不取得该锁；`version` / `--version` 和 `help` / `--help` 还会在加载配置与创建应用服务之前直接返回，因此 GUI 运行时仍可用于脚本和发布验证。
 
 `test-route --connect` 必须同时提供真实 `--url`，避免程序对虚构仓库发起网络请求。
+
+### GitHub CLI 多账号路由
+
+`gh-login` 为每个 GitHub 身份使用独立的
+`%APPDATA%\GitKeyRouter\github-cli\<identity-id-hash>\` 目录，并强制使用浏览器登录。
+登录完成后，GitKeyRouter 会在同一个 `GH_CONFIG_DIR` 中调用
+`gh api user --jq .login`，并要求实际账号与身份的 `AccountName` 一致。
+`gh-status` 执行相同核验。
+
+`gh -- ...` 的身份选择顺序为：显式 `--identity`、转发参数中的 `-R/--repo`、
+当前分支跟踪 remote、`remote.pushDefault`、`origin`。自动模式读取 Git 展开的
+push URL，要求选中 remote 使用已配置的 SSH HostAlias；多个 remote 指向不同身份、
+HostAlias 与仓库路由不一致，或无法唯一判断时都会拒绝执行。
+
+包装器要求 GitHub CLI 2.40.0 或更高版本，为子进程设置目标 `GH_CONFIG_DIR`、
+`GH_HOST` 和已解析的 `GH_REPO`（没有仓库上下文时移除），并移除
+`GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN`、`GITHUB_ENTERPRISE_TOKEN`。
+它不会调用全局 `gh auth switch`，也不会把转发参数或输出写入 GitKeyRouter 日志。
+包装执行的 `gh auth`、`gh config`、`gh alias` 和自行指定 `--hostname` 会被阻止；
+账号登录请使用 `gh-login`。如果 `hosts.yml` 出现明文 `oauth_token` 键，该身份会被阻止，
+且 Token 值不会输出。
+
+GitHub CLI 配置和凭据不进入 GitKeyRouter 配置、快照或便携备份。恢复或迁移后需要
+为每个身份重新运行 `gh-login`；凭据仍由 GitHub CLI 和系统安全凭据存储负责。
 
 CLI 诊断退出码：
 

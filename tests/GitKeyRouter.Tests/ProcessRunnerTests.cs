@@ -148,6 +148,55 @@ public sealed class ProcessRunnerTests
         Assert.False(result.Succeeded);
     }
 
+    [Fact]
+    public async Task Run_InheritedConsolePreservesExitCodeWithoutCapturingSensitiveArguments()
+    {
+        var runner = new ProcessRunner();
+
+        var result = await runner.RunAsync(new ProcessRequest
+        {
+            ExecutablePath = ChildExecutablePath,
+            Arguments = ["exit", "17"],
+            IoMode = ProcessIoMode.InheritConsole,
+            CreateNoWindow = false,
+            IncludeArgumentsInResult = false
+        });
+
+        Assert.Equal(17, result.ExitCode);
+        Assert.Empty(result.Arguments);
+        Assert.Empty(result.StandardOutput);
+        Assert.Empty(result.StandardError);
+    }
+
+    [Fact]
+    public async Task Run_NullEnvironmentValueRemovesInheritedVariable()
+    {
+        var variableName = $"GITKEYROUTER_TEST_{Guid.NewGuid():N}";
+        var previousValue = Environment.GetEnvironmentVariable(variableName);
+        Environment.SetEnvironmentVariable(variableName, "inherited-secret");
+        try
+        {
+            var runner = new ProcessRunner();
+            var result = await runner.RunAsync(new ProcessRequest
+            {
+                ExecutablePath = ChildExecutablePath,
+                Arguments = ["print-env", variableName],
+                EnvironmentVariables = new Dictionary<string, string?>
+                {
+                    [variableName] = null
+                }
+            });
+
+            Assert.True(result.Succeeded);
+            Assert.Equal("<null>", result.StandardOutput.Trim());
+            Assert.DoesNotContain("inherited-secret", result.StandardOutput);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, previousValue);
+        }
+    }
+
     private static ProcessRequest WaitRequest(string readyPath, TimeSpan timeout)
         => new()
         {

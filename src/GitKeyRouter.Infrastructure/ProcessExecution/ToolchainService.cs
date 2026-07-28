@@ -19,13 +19,15 @@ public sealed class ToolchainService : IToolchainService
         var sshTask = InspectExecutableAsync("ssh.exe", SshCandidates("ssh.exe"), ["-V"], cancellationToken);
         var keygenTask = InspectExecutableAsync("ssh-keygen.exe", SshCandidates("ssh-keygen.exe"), ["-?"], cancellationToken, preferFileVersion: true);
         var wingetTask = InspectExecutableAsync("winget.exe", WingetCandidates(), ["--version"], cancellationToken);
-        await Task.WhenAll(gitTask, sshTask, keygenTask, wingetTask).ConfigureAwait(false);
+        var ghTask = InspectExecutableAsync("gh.exe", GitHubCliCandidates(), ["--version"], cancellationToken);
+        await Task.WhenAll(gitTask, sshTask, keygenTask, wingetTask, ghTask).ConfigureAwait(false);
         return new ToolchainInfo
         {
             Git = await gitTask.ConfigureAwait(false),
             Ssh = await sshTask.ConfigureAwait(false),
             SshKeygen = await keygenTask.ConfigureAwait(false),
-            Winget = await wingetTask.ConfigureAwait(false)
+            Winget = await wingetTask.ConfigureAwait(false),
+            Gh = await ghTask.ConfigureAwait(false)
         };
     }
 
@@ -106,6 +108,20 @@ public sealed class ToolchainService : IToolchainService
 
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         yield return Path.Combine(localAppData, "Microsoft", "WindowsApps", "winget.exe");
+    }
+
+    private static IEnumerable<string> GitHubCliCandidates()
+    {
+        foreach (var path in PathCandidates("gh.exe"))
+        {
+            yield return path;
+        }
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        yield return Path.Combine(programFiles, "GitHub CLI", "gh.exe");
+        yield return Path.Combine(localAppData, "Programs", "GitHub CLI", "gh.exe");
+        yield return Path.Combine(localAppData, "Microsoft", "WindowsApps", "gh.exe");
     }
 
     private static IEnumerable<string> PathCandidates(string executableName)

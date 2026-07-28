@@ -35,6 +35,15 @@ internal static class ProcessTestChild
             case "spawn-tree" when args.Length == 3:
                 return await SpawnTreeAsync(args[1], args[2]).ConfigureAwait(false);
 
+            case "print-env" when args.Length == 2:
+                Console.Out.WriteLine(
+                    Environment.GetEnvironmentVariable(args[1]) ?? "<null>");
+                return 0;
+
+            case "exit" when args.Length == 2
+                && int.TryParse(args[1], out var exitCode):
+                return exitCode;
+
             default:
                 Console.Error.WriteLine($"Invalid mode or arguments: {string.Join(' ', args)}");
                 return 2;

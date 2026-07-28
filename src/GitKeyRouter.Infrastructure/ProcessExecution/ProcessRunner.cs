@@ -10,6 +10,7 @@ public class ProcessRunner : IProcessRunner
     {
         ArgumentNullException.ThrowIfNull(request);
         var stopwatch = Stopwatch.StartNew();
+        var captureOutput = request.IoMode == ProcessIoMode.Capture;
         var output = new BoundedLineBuffer(
             request.MaxOutputLines,
             request.MaxOutputCharactersPerLine);
@@ -23,20 +24,23 @@ public class ProcessRunner : IProcessRunner
             EnableRaisingEvents = true
         };
 
-        process.OutputDataReceived += (_, eventArgs) =>
+        if (captureOutput)
         {
-            if (eventArgs.Data is not null)
+            process.OutputDataReceived += (_, eventArgs) =>
             {
-                output.Add(eventArgs.Data);
-            }
-        };
-        process.ErrorDataReceived += (_, eventArgs) =>
-        {
-            if (eventArgs.Data is not null)
+                if (eventArgs.Data is not null)
+                {
+                    output.Add(eventArgs.Data);
+                }
+            };
+            process.ErrorDataReceived += (_, eventArgs) =>
             {
-                errors.Add(eventArgs.Data);
-            }
-        };
+                if (eventArgs.Data is not null)
+                {
+                    errors.Add(eventArgs.Data);
+                }
+            };
+        }
 
         try
         {
@@ -45,8 +49,11 @@ public class ProcessRunner : IProcessRunner
                 throw new InvalidOperationException($"Failed to start '{request.ExecutablePath}'.");
             }
 
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+            if (captureOutput)
+            {
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+            }
         }
         catch (Exception exception)
         {
@@ -54,7 +61,7 @@ public class ProcessRunner : IProcessRunner
             return new ProcessResult
             {
                 ExecutablePath = request.ExecutablePath,
-                Arguments = request.Arguments,
+                Arguments = request.IncludeArgumentsInResult ? request.Arguments : [],
                 Duration = stopwatch.Elapsed,
                 StartException = exception,
                 StandardError = exception.Message
@@ -88,10 +95,10 @@ public class ProcessRunner : IProcessRunner
         return new ProcessResult
         {
             ExecutablePath = request.ExecutablePath,
-            Arguments = request.Arguments,
+            Arguments = request.IncludeArgumentsInResult ? request.Arguments : [],
             ExitCode = process.HasExited ? process.ExitCode : null,
-            StandardOutput = output.GetText(),
-            StandardError = errors.GetText(),
+            StandardOutput = captureOutput ? output.GetText() : string.Empty,
+            StandardError = captureOutput ? errors.GetText() : string.Empty,
             StandardOutputTruncated = output.Truncated,
             StandardErrorTruncated = errors.Truncated,
             TimedOut = timedOut,
@@ -147,8 +154,8 @@ public class ProcessRunner : IProcessRunner
         {
             FileName = request.ExecutablePath,
             UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardOutput = request.IoMode == ProcessIoMode.Capture,
+            RedirectStandardError = request.IoMode == ProcessIoMode.Capture,
             CreateNoWindow = request.CreateNoWindow,
             WorkingDirectory = request.WorkingDirectory ?? string.Empty
         };
@@ -160,7 +167,14 @@ public class ProcessRunner : IProcessRunner
 
         foreach (var pair in request.EnvironmentVariables)
         {
-            startInfo.Environment[pair.Key] = pair.Value;
+            if (pair.Value is null)
+            {
+                startInfo.Environment.Remove(pair.Key);
+            }
+            else
+            {
+                startInfo.Environment[pair.Key] = pair.Value;
+            }
         }
 
         return startInfo;

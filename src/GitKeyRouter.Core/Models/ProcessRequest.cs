@@ -1,5 +1,11 @@
 namespace GitKeyRouter.Core.Models;
 
+public enum ProcessIoMode
+{
+    Capture,
+    InheritConsole
+}
+
 public sealed class ProcessRequest
 {
     public required string ExecutablePath { get; init; }
@@ -19,5 +25,9 @@ public sealed class ProcessRequest
     public IReadOnlyDictionary<string, string?> EnvironmentVariables { get; init; }
         = new Dictionary<string, string?>();
 
+    public ProcessIoMode IoMode { get; init; } = ProcessIoMode.Capture;
+
     public bool CreateNoWindow { get; init; } = true;
+
+    public bool IncludeArgumentsInResult { get; init; } = true;
 }

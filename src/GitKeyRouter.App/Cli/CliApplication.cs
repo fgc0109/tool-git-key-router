@@ -3,7 +3,7 @@ using GitKeyRouter.Core.Models;
 
 namespace GitKeyRouter.App.Cli;
 
-public sealed class CliApplication
+public sealed partial class CliApplication
 {
     private readonly ApplicationServices _services;
 
@@ -52,6 +52,9 @@ public sealed class CliApplication
             "test-service" => await TestServiceAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "test-route" => await TestRouteAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "test-ssh" => await TestSshAsync(args[1..], cancellationToken).ConfigureAwait(false),
+            "gh-login" => await GitHubLoginAsync(args[1..], cancellationToken).ConfigureAwait(false),
+            "gh-status" => await GitHubStatusAsync(args[1..], cancellationToken).ConfigureAwait(false),
+            "gh" => await GitHubAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "version" or "--version" or "-v" => PrintVersion(),
             "help" or "--help" or "-h" => PrintHelp(),
             _ => UnknownCommand(command)
@@ -360,6 +363,9 @@ public sealed class CliApplication
         Console.WriteLine("  test-service <id-or-host>");
         Console.WriteLine("  test-route <namespace> [--service <id-or-host>] [--url <repository-url>] [--connect]");
         Console.WriteLine("  test-ssh <host-alias-or-identity-id> [--verbose]");
+        Console.WriteLine("  gh-login <identity-id-or-host-alias>");
+        Console.WriteLine("  gh-status [identity-id-or-host-alias]");
+        Console.WriteLine("  gh [--identity <identity-id-or-host-alias>] -- <gh-arguments>");
         Console.WriteLine("  version");
         return 0;
     }
