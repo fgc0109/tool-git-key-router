@@ -28,11 +28,13 @@ Process execution tests launch the repository-owned `GitKeyRouter.ProcessTestChi
 
 Both test projects use the xUnit v3 executable test-project model (`OutputType=Exe`) and the xUnit VSTest adapter, preserving the existing `dotnet test` and TRX workflow. Package versions are declared once in the root `Directory.Packages.props`; individual project files contain version-free `PackageReference` entries, and checked-in lock files pin the resolved graph for normal and `win-x64` restores.
 
-xUnit v3 analyzer rule `xUnit1051` is temporarily suppressed in both test projects because existing operation-specific cancellation and timeout tests intentionally use dedicated tokens. The suppression is explicit technical debt for the replanned analyzer cleanup after v0.4.18; all other compiler and analyzer warnings remain errors when `CI=true`.
+xUnit v3 analyzer rule `xUnit1051` is temporarily suppressed in both test projects because existing operation-specific cancellation and timeout tests intentionally use dedicated tokens. The suppression is explicit technical debt for the replanned v0.4.22 analyzer cleanup; all other compiler and analyzer warnings remain errors when `CI=true`.
 
 ## GitHub CLI identity boundary
 
-GitHub CLI routing is optional and supports `gh` 2.40.0 or later. The effective Git push URL, explicit `-R/--repo`, or an explicit identity resolves to one configured GitHub identity. Automatic repository routing requires a unique SSH HostAlias and verifies that the HostAlias agrees with the most specific enabled Service, Owner, or Repository route.
+GitHub CLI routing is optional and supports `gh` 2.40.0 or later. The effective Git push URL, explicit `-R/--repo`, or an explicit identity resolves to one configured GitHub identity. Automatic remote precedence is branch `pushRemote`, `remote.pushDefault`, branch tracking remote, then `origin`. Every push URL on the selected remote must resolve to the same identity and repository; unselected remotes are diagnostic context rather than automatic blockers. SSH HostAlias evidence must agree with the most specific enabled Service, Owner, or Repository route. HTTPS remotes are accepted only when that route uniquely identifies the account.
+
+`gh-resolve` exposes this decision as text or JSON without creating a credential directory or making a GitHub API request. Toolchain results include the selected executable path, discovery source, version probe, and existing candidates so PATH shadowing and unsupported versions are visible before authentication.
 
 Each identity receives a `GH_CONFIG_DIR` derived from a SHA-256 hash of its stable identity ID. The child process also receives the resolved `GH_HOST` and, when available, the exact `GH_REPO`. Inherited `GH_TOKEN`, `GITHUB_TOKEN`, enterprise token variables, and unrelated repository overrides are removed. GitKeyRouter never calls `gh auth switch`.
 

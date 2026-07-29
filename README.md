@@ -380,6 +380,8 @@ GitKeyRouter.exe test-ssh github-camus
 GitKeyRouter.exe test-ssh github-camus --verbose
 GitKeyRouter.exe gh-login github-camus
 GitKeyRouter.exe gh-status github-camus
+GitKeyRouter.exe gh-resolve --json
+GitKeyRouter.exe gh-resolve -R project-base-mirror/tool-git-key-router
 GitKeyRouter.exe gh -- release view
 GitKeyRouter.exe gh --identity github-camus -- release create v1.0.0
 GitKeyRouter.exe gh -- release create v1.0.0 -R camus0109/example
@@ -404,9 +406,14 @@ GUI 与带 `--yes` 的 `apply` / `apply-profiles` 共享排他锁，防止跨进
 `gh-status` 执行相同核验。
 
 `gh -- ...` 的身份选择顺序为：显式 `--identity`、转发参数中的 `-R/--repo`、
-当前分支跟踪 remote、`remote.pushDefault`、`origin`。自动模式读取 Git 展开的
-push URL，要求选中 remote 使用已配置的 SSH HostAlias；多个 remote 指向不同身份、
-HostAlias 与仓库路由不一致，或无法唯一判断时都会拒绝执行。
+当前分支的 `pushRemote`、`remote.pushDefault`、跟踪 remote、`origin`。自动模式读取
+选中 remote 的全部 Git 展开 push URL；这些 URL 必须指向同一身份和仓库。未选中的
+fork/upstream remote 只产生诊断警告。HTTPS remote 只有在仓库路由能够唯一选中身份时
+才会回退解析；SSH HostAlias 与仓库路由不一致或无法唯一判断时仍会拒绝执行。
+
+`gh-resolve` 是完全只读的预检命令。它显示 `gh.exe` 路径、版本和来源，以及仓库根目录、
+remote 选择依据、push URL、HostAlias、身份和最终 `GH_HOST` / `GH_REPO`；`--json` 可供
+DevRunner 和其他自动化工具消费。该命令不会创建凭据目录，也不会执行账号验证。
 
 包装器要求 GitHub CLI 2.40.0 或更高版本，为子进程设置目标 `GH_CONFIG_DIR`、
 `GH_HOST` 和已解析的 `GH_REPO`（没有仓库上下文时移除），并移除

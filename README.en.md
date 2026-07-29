@@ -376,6 +376,8 @@ GitKeyRouter.exe test-ssh github-camus
 GitKeyRouter.exe test-ssh github-camus --verbose
 GitKeyRouter.exe gh-login github-camus
 GitKeyRouter.exe gh-status github-camus
+GitKeyRouter.exe gh-resolve --json
+GitKeyRouter.exe gh-resolve -R project-base-mirror/tool-git-key-router
 GitKeyRouter.exe gh -- release view
 GitKeyRouter.exe gh --identity github-camus -- release create v1.0.0
 GitKeyRouter.exe gh -- release create v1.0.0 -R camus0109/example
@@ -398,10 +400,16 @@ requires the returned login to match the identity's `AccountName`. `gh-status` p
 same verification.
 
 `gh -- ...` selects an identity in this order: explicit `--identity`, forwarded `-R/--repo`,
-the current branch's tracking remote, `remote.pushDefault`, then `origin`. Automatic mode
-reads Git's expanded push URL and requires the selected remote to use a configured SSH
-HostAlias. Execution is refused when remotes select different identities, the HostAlias
-disagrees with the repository route, or no unique identity can be determined.
+the current branch's `pushRemote`, `remote.pushDefault`, its tracking remote, then `origin`.
+Automatic mode reads every expanded push URL for the selected remote; all of those URLs must
+resolve to one identity and repository. Unselected fork or upstream remotes produce diagnostic
+warnings instead of blocking the selected target. HTTPS remotes fall back only when repository
+routing selects one identity. A HostAlias/route mismatch or ambiguous result still fails closed.
+
+`gh-resolve` is a read-only preflight command. It reports the selected `gh.exe` path, version,
+and source plus the repository root, remote decision source, push URLs, HostAlias, identity, and
+final `GH_HOST` / `GH_REPO`. `--json` provides a stable automation surface. The command does not
+create a credential directory or verify an account.
 
 The wrapper requires GitHub CLI 2.40.0 or later, sets the target `GH_CONFIG_DIR`, `GH_HOST`,
 and resolved `GH_REPO` (or removes it when there is no repository context), and removes `GH_TOKEN`,

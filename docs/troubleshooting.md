@@ -43,6 +43,7 @@ Diagnostics lists every existing candidate found in PATH and common Windows loca
 
 ## GitHub CLI identity routing is blocked
 
+- Run `GitKeyRouter.exe gh-resolve --json` first. It reports the selected `gh.exe`, remote precedence decision, effective push URLs, HostAlias, route, identity, `GH_HOST`, and `GH_REPO` without touching credentials.
 - Install GitHub CLI 2.40.0 or later. Older versions are rejected because their same-host account model cannot guarantee isolated multi-account routing.
 - Run `GitKeyRouter.exe gh-status <identity-id-or-host-alias>` to verify the configured `AccountName` against `gh api user`.
 - If no login exists, run `GitKeyRouter.exe gh-login <identity-id-or-host-alias>` and complete the browser flow with the expected account.
