@@ -46,7 +46,10 @@ Diagnostics lists every existing candidate found in PATH and common Windows loca
 - Run `GitKeyRouter.exe gh-resolve --json` first. It reports the selected `gh.exe`, remote precedence decision, effective push URLs, HostAlias, route, identity, `GH_HOST`, and `GH_REPO` without touching credentials.
 - Install GitHub CLI 2.40.0 or later. Older versions are rejected because their same-host account model cannot guarantee isolated multi-account routing.
 - Run `GitKeyRouter.exe gh-status <identity-id-or-host-alias>` to verify the configured `AccountName` against `gh api user`.
+- Run `GitKeyRouter.exe gh-status --all --json` to audit every configured GitHub identity without guessing from the current repository.
 - If no login exists, run `GitKeyRouter.exe gh-login <identity-id-or-host-alias>` and complete the browser flow with the expected account.
+- To remove one isolated login, run `GitKeyRouter.exe gh-logout <identity-id-or-host-alias> --yes`; it targets the configured Host and AccountName and does not revoke the OAuth application grant on GitHub.
+- If `identity.json` is malformed or does not match the selected identity, do not copy another identity's directory over it. Preserve the directory for diagnosis, log out through the expected identity if possible, and repeat browser login.
 - If `hosts.yml` contains a plaintext `oauth_token`, repair the Windows credential store, remove the insecure GitHub CLI login through trusted GitHub CLI tooling, and log in again. GitKeyRouter deliberately does not read or migrate the Token value.
 - Automatic routing rejects repositories whose remotes select different identities, whose selected HostAlias disagrees with the configured route, or whose tracking/push-default/origin remote cannot be determined. Use explicit `--identity` only after reviewing the repository target.
 - `GH_TOKEN`, `GITHUB_TOKEN`, enterprise Token variables, and inherited `GH_REPO` do not override the routed child process. Pass the target through `-R/--repo` instead of environment variables.

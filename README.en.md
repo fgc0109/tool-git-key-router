@@ -376,6 +376,8 @@ GitKeyRouter.exe test-ssh github-camus
 GitKeyRouter.exe test-ssh github-camus --verbose
 GitKeyRouter.exe gh-login github-camus
 GitKeyRouter.exe gh-status github-camus
+GitKeyRouter.exe gh-status --all --json
+GitKeyRouter.exe gh-logout github-camus --yes
 GitKeyRouter.exe gh-resolve --json
 GitKeyRouter.exe gh-resolve -R project-base-mirror/tool-git-key-router
 GitKeyRouter.exe gh -- release view
@@ -397,7 +399,11 @@ The GUI and `apply --yes` / `apply-profiles --yes` share the exclusive lock to p
 `%APPDATA%\GitKeyRouter\github-cli\<identity-id-hash>\` directory and forces browser login.
 After login, GitKeyRouter runs `gh api user --jq .login` in the same `GH_CONFIG_DIR` and
 requires the returned login to match the identity's `AccountName`. `gh-status` performs the
-same verification.
+same verification, while `gh-status --all --json` checks every configured GitHub identity.
+After the first successful verification, the directory receives an `identity.json` manifest
+containing only the stable ID, HostAlias, host, and expected account. A mismatched manifest
+blocks directory reuse and never contains a token. `gh-logout <identity> --yes` logs out only
+the named host and account while retaining the directory for diagnostics.
 
 `gh -- ...` selects an identity in this order: explicit `--identity`, forwarded `-R/--repo`,
 the current branch's `pushRemote`, `remote.pushDefault`, its tracking remote, then `origin`.
@@ -416,8 +422,9 @@ and resolved `GH_REPO` (or removes it when there is no repository context), and 
 `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` from the child process.
 It never calls global `gh auth switch`, and GitKeyRouter does not log forwarded arguments or
 output. Wrapped `gh auth`, `gh config`, `gh alias`, and user-supplied `--hostname` are blocked;
-use `gh-login` for account setup. If `hosts.yml` contains a plaintext `oauth_token` key, the
-identity is blocked and the token value is never printed.
+use `gh-login` for account setup. Credential health checks bound the size of `hosts.yml`, reject
+reparse points, and detect both quoted and unquoted plaintext `oauth_token` keys. The identity
+is blocked without reading or printing the token value.
 
 GitHub CLI configuration and credentials are excluded from GitKeyRouter configuration,
 snapshots, and portable backups. Run `gh-login` again for each identity after restore or

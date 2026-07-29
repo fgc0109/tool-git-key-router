@@ -38,9 +38,11 @@ GitHub CLI routing is optional and supports `gh` 2.40.0 or later. The effective 
 
 Each identity receives a `GH_CONFIG_DIR` derived from a SHA-256 hash of its stable identity ID. The child process also receives the resolved `GH_HOST` and, when available, the exact `GH_REPO`. Inherited `GH_TOKEN`, `GITHUB_TOKEN`, enterprise token variables, and unrelated repository overrides are removed. GitKeyRouter never calls `gh auth switch`.
 
+After the first successful account verification, GitKeyRouter atomically registers an `identity.json` manifest containing schema version, stable identity ID, service host, HostAlias, and expected account. Existing v0.4.17 directories are adopted only after `gh api user --jq .login` succeeds. A malformed, oversized, reparse-point, or mismatched manifest blocks the directory before `gh` starts. The manifest never contains credentials.
+
 Browser login is serialized with a per-identity file lock. After login and before every wrapped command, a captured `gh api user --jq .login` probe must match the configured `AccountName`. The probe arguments and output are not logged. Forwarded commands inherit the console, omit arguments from their process result, and return the original `gh` exit code.
 
-GitHub CLI owns OAuth and credential persistence. GitKeyRouter only checks whether `hosts.yml` contains an `oauth_token` key; it never reads the value, and blocks the identity when plaintext fallback is detected. GitHub CLI directories are outside application configuration, snapshots, and portable backup payloads.
+GitHub CLI owns OAuth and credential persistence. GitKeyRouter bounds credential metadata inspection to 1 MiB, rejects a reparse-point `hosts.yml`, and scans only for quoted or unquoted `oauth_token` keys; it never reads the value and blocks the identity when plaintext fallback is detected. GitHub CLI directories are outside application configuration, snapshots, and portable backup payloads. `gh-logout` removes only the configured account through GitHub CLI and deletes the non-secret identity manifest after success.
 
 ## Application instance boundary
 

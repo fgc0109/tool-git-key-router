@@ -380,6 +380,8 @@ GitKeyRouter.exe test-ssh github-camus
 GitKeyRouter.exe test-ssh github-camus --verbose
 GitKeyRouter.exe gh-login github-camus
 GitKeyRouter.exe gh-status github-camus
+GitKeyRouter.exe gh-status --all --json
+GitKeyRouter.exe gh-logout github-camus --yes
 GitKeyRouter.exe gh-resolve --json
 GitKeyRouter.exe gh-resolve -R project-base-mirror/tool-git-key-router
 GitKeyRouter.exe gh -- release view
@@ -403,7 +405,10 @@ GUI 与带 `--yes` 的 `apply` / `apply-profiles` 共享排他锁，防止跨进
 `%APPDATA%\GitKeyRouter\github-cli\<identity-id-hash>\` 目录，并强制使用浏览器登录。
 登录完成后，GitKeyRouter 会在同一个 `GH_CONFIG_DIR` 中调用
 `gh api user --jq .login`，并要求实际账号与身份的 `AccountName` 一致。
-`gh-status` 执行相同核验。
+`gh-status` 执行相同核验；`gh-status --all --json` 可一次检查全部 GitHub 身份。
+首次验证成功后，目录内会写入只包含稳定身份 ID、HostAlias、Host 和预期账号的
+`identity.json`。清单与当前身份不一致时目录会被阻止，清单中不包含 Token。
+`gh-logout <identity> --yes` 只注销指定 Host 和账号，并保留目录供诊断。
 
 `gh -- ...` 的身份选择顺序为：显式 `--identity`、转发参数中的 `-R/--repo`、
 当前分支的 `pushRemote`、`remote.pushDefault`、跟踪 remote、`origin`。自动模式读取
@@ -420,8 +425,8 @@ DevRunner 和其他自动化工具消费。该命令不会创建凭据目录，�
 `GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN`、`GITHUB_ENTERPRISE_TOKEN`。
 它不会调用全局 `gh auth switch`，也不会把转发参数或输出写入 GitKeyRouter 日志。
 包装执行的 `gh auth`、`gh config`、`gh alias` 和自行指定 `--hostname` 会被阻止；
-账号登录请使用 `gh-login`。如果 `hosts.yml` 出现明文 `oauth_token` 键，该身份会被阻止，
-且 Token 值不会输出。
+账号登录请使用 `gh-login`。凭据健康检查限制 `hosts.yml` 大小，拒绝 reparse point，
+并识别普通或引号形式的明文 `oauth_token` 键；异常身份会被阻止，Token 值不会读取或输出。
 
 GitHub CLI 配置和凭据不进入 GitKeyRouter 配置、快照或便携备份。恢复或迁移后需要
 为每个身份重新运行 `gh-login`；凭据仍由 GitHub CLI 和系统安全凭据存储负责。
