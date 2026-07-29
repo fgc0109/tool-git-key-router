@@ -9,8 +9,8 @@
     <TreatWarningsAsErrors Condition="'$(CI)' == 'true'">true</TreatWarningsAsErrors>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <Deterministic>true</Deterministic>
-    <Version>0.4.19</Version>
-    <AssemblyVersion>0.4.19.0</AssemblyVersion>
-    <FileVersion>0.4.19.0</FileVersion>
+    <Version>0.4.20</Version>
+    <AssemblyVersion>0.4.20.0</AssemblyVersion>
+    <FileVersion>0.4.20.0</FileVersion>
   </PropertyGroup>
 </Project>

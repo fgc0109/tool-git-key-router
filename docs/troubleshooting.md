@@ -52,9 +52,10 @@ Diagnostics lists every existing candidate found in PATH and common Windows loca
 - If `identity.json` is malformed or does not match the selected identity, do not copy another identity's directory over it. Preserve the directory for diagnosis, log out through the expected identity if possible, and repeat browser login.
 - If `hosts.yml` contains a plaintext `oauth_token`, repair the Windows credential store, remove the insecure GitHub CLI login through trusted GitHub CLI tooling, and log in again. GitKeyRouter deliberately does not read or migrate the Token value.
 - Automatic routing rejects repositories whose remotes select different identities, whose selected HostAlias disagrees with the configured route, or whose tracking/push-default/origin remote cannot be determined. Use explicit `--identity` only after reviewing the repository target.
-- `GH_TOKEN`, `GITHUB_TOKEN`, enterprise Token variables, and inherited `GH_REPO` do not override the routed child process. Pass the target through `-R/--repo` instead of environment variables.
+- `GH_TOKEN`, `GITHUB_TOKEN`, enterprise Token variables, inherited `GH_REPO`, Git repository paths, SSH/ASKPASS settings, and Git config injection variables do not override the routed child process. Pass the target through `-R/--repo` instead of environment variables.
+- If an identity reports that another account operation is busy, allow the current login, logout, first registration, or extension operation to finish and retry. Ordinary commands for the same verified identity can run concurrently, but account-changing operations deliberately wait for them to exit.
 
-Wrapped `gh auth`, `gh config`, `gh alias`, and user-supplied `--hostname` are blocked because they can mutate account selection or bypass the routed host. GitKeyRouter does not log forwarded arguments or output; review the live console before sharing it because the invoked GitHub CLI command may display repository data.
+Wrapped `gh auth`, `gh config`, `gh alias`, and user-supplied `--hostname` are blocked because they can mutate account selection or bypass the routed host. Use `gh-login`, `gh-logout`, or `gh-status` for account lifecycle operations. GitKeyRouter does not log forwarded arguments or output; review the live console before sharing it because the invoked GitHub CLI command may display repository data.
 
 ## Git service SSH returns a non-zero exit code after success
 

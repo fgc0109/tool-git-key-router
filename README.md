@@ -422,11 +422,16 @@ DevRunner 和其他自动化工具消费。该命令不会创建凭据目录，�
 
 包装器要求 GitHub CLI 2.40.0 或更高版本，为子进程设置目标 `GH_CONFIG_DIR`、
 `GH_HOST` 和已解析的 `GH_REPO`（没有仓库上下文时移除），并移除
-`GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN`、`GITHUB_ENTERPRISE_TOKEN`。
+`GH_TOKEN`、`GITHUB_TOKEN`、企业 Token、Git 仓库路径、SSH/ASKPASS 和 Git 配置覆盖变量。
 它不会调用全局 `gh auth switch`，也不会把转发参数或输出写入 GitKeyRouter 日志。
 包装执行的 `gh auth`、`gh config`、`gh alias` 和自行指定 `--hostname` 会被阻止；
-账号登录请使用 `gh-login`。凭据健康检查限制 `hosts.yml` 大小，拒绝 reparse point，
+账号生命周期请使用 `gh-login`、`gh-logout` 和 `gh-status`。凭据健康检查限制 `hosts.yml` 大小，拒绝 reparse point，
 并识别普通或引号形式的明文 `oauth_token` 键；异常身份会被阻止，Token 值不会读取或输出。
+
+每个身份目录具有独立的跨进程共享/独占锁。已登记身份的普通命令在账号核验和整个
+子进程执行期间持有共享锁，可以并行运行；首次登记、登录、登出和 `gh extension`
+操作持有独占锁，不同身份互不阻塞。服务层返回的安全回执只包含身份、Host、仓库、
+`gh` 版本、退出码、耗时和锁模式，不包含参数、输出或凭据。
 
 GitHub CLI 配置和凭据不进入 GitKeyRouter 配置、快照或便携备份。恢复或迁移后需要
 为每个身份重新运行 `gh-login`；凭据仍由 GitHub CLI 和系统安全凭据存储负责。

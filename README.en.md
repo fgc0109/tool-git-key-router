@@ -419,12 +419,20 @@ create a credential directory or verify an account.
 
 The wrapper requires GitHub CLI 2.40.0 or later, sets the target `GH_CONFIG_DIR`, `GH_HOST`,
 and resolved `GH_REPO` (or removes it when there is no repository context), and removes `GH_TOKEN`,
-`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, and `GITHUB_ENTERPRISE_TOKEN` from the child process.
+`GITHUB_TOKEN`, enterprise token variables, Git repository paths, SSH/ASKPASS settings, and Git
+configuration overrides from the child process.
 It never calls global `gh auth switch`, and GitKeyRouter does not log forwarded arguments or
 output. Wrapped `gh auth`, `gh config`, `gh alias`, and user-supplied `--hostname` are blocked;
-use `gh-login` for account setup. Credential health checks bound the size of `hosts.yml`, reject
+use `gh-login`, `gh-logout`, and `gh-status` for account lifecycle operations. Credential health checks bound the size of `hosts.yml`, reject
 reparse points, and detect both quoted and unquoted plaintext `oauth_token` keys. The identity
 is blocked without reading or printing the token value.
+
+Each identity directory has an independent cross-process reader/writer lock. Ordinary commands
+for a registered identity hold a shared lock through verification and child execution, so they can
+run concurrently. First registration, login, logout, and `gh extension` operations hold the exclusive
+lock; different identities do not block one another. The service's safe execution receipt contains
+only identity, host, repository, `gh` version, exit code, duration, and lock mode—never arguments,
+output, or credentials.
 
 GitHub CLI configuration and credentials are excluded from GitKeyRouter configuration,
 snapshots, and portable backups. Run `gh-login` again for each identity after restore or
