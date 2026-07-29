@@ -13,7 +13,19 @@ public sealed record GitHubCliCommandResult(
     string Message,
     string? IdentityId = null,
     string? AccountName = null,
-    string? ConfigDirectory = null);
+    string? ConfigDirectory = null,
+    GitHubCliExecutionReceipt? Receipt = null);
+
+public sealed record GitHubCliExecutionReceipt(
+    string IdentityId,
+    string HostAlias,
+    string AccountName,
+    string GitHubHost,
+    string? GitHubRepository,
+    string? GitHubCliVersion,
+    int ExitCode,
+    long DurationMilliseconds,
+    string LockMode);
 
 public sealed record GitHubCliResolutionResult(
     bool Success,
@@ -46,6 +58,22 @@ public sealed class GitHubCliService
         "GITHUB_TOKEN",
         "GH_ENTERPRISE_TOKEN",
         "GITHUB_ENTERPRISE_TOKEN"
+    ];
+
+    private static readonly string[] GitOverrideEnvironmentVariables =
+    [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_SSH",
+        "GIT_SSH_COMMAND",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+        "GCM_INTERACTIVE",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_COUNT"
     ];
 
     private static readonly Regex PlaintextTokenPattern = new(
@@ -110,6 +138,7 @@ public sealed class GitHubCliService
 
         await using var identityLock = await AcquireIdentityLockAsync(
             configDirectory,
+            IdentityLockMode.Exclusive,
             cancellationToken).ConfigureAwait(false);
         if (identityLock is null)
         {
@@ -117,6 +146,12 @@ public sealed class GitHubCliService
                 $"Another GitHub CLI account operation is already running for identity '{context.Identity.HostAlias}'.",
                 2,
                 context);
+        }
+
+        manifestError = ValidateIdentityManifest(configDirectory, context, out _);
+        if (manifestError is not null)
+        {
+            return Failure(manifestError, 2, context);
         }
 
         var environment = BuildEnvironment(configDirectory, context.Service.HostName);
@@ -214,6 +249,7 @@ public sealed class GitHubCliService
 
         await using var identityLock = await AcquireIdentityLockAsync(
             configDirectory,
+            IdentityLockMode.Exclusive,
             cancellationToken).ConfigureAwait(false);
         if (identityLock is null)
         {
@@ -221,6 +257,12 @@ public sealed class GitHubCliService
                 $"Another GitHub CLI account operation is already running for identity '{context.Identity.HostAlias}'.",
                 2,
                 context);
+        }
+
+        manifestError = ValidateIdentityManifest(configDirectory, context, out _);
+        if (manifestError is not null)
+        {
+            return Failure(manifestError, 2, context);
         }
 
         var process = await _processRunner.RunAsync(new ProcessRequest
@@ -284,6 +326,32 @@ public sealed class GitHubCliService
         }
 
         var configDirectory = GetConfigDirectory(context.Identity);
+        var directoryError = ValidateIdentityDirectory(configDirectory);
+        if (directoryError is not null)
+        {
+            return Failure(directoryError, 2, context);
+        }
+
+        Directory.CreateDirectory(configDirectory);
+        var manifestError = ValidateIdentityManifest(configDirectory, context, out var manifestExists);
+        if (manifestError is not null)
+        {
+            return Failure(manifestError, 2, context);
+        }
+
+        var lockMode = manifestExists ? IdentityLockMode.Shared : IdentityLockMode.Exclusive;
+        await using var identityLock = await AcquireIdentityLockAsync(
+            configDirectory,
+            lockMode,
+            cancellationToken).ConfigureAwait(false);
+        if (identityLock is null)
+        {
+            return Failure(
+                $"GitHub CLI identity '{context.Identity.HostAlias}' is busy with another account operation.",
+                2,
+                context);
+        }
+
         return await VerifyAndRegisterIdentityAsync(
             executable.Path,
             context,
@@ -367,6 +435,34 @@ public sealed class GitHubCliService
         }
 
         var configDirectory = GetConfigDirectory(context.Identity);
+        var directoryError = ValidateIdentityDirectory(configDirectory);
+        if (directoryError is not null)
+        {
+            return Failure(directoryError, 2, context);
+        }
+
+        Directory.CreateDirectory(configDirectory);
+        var manifestError = ValidateIdentityManifest(configDirectory, context, out var manifestExists);
+        if (manifestError is not null)
+        {
+            return Failure(manifestError, 2, context);
+        }
+
+        var lockMode = RequiresExclusiveIdentityOperation(ghArguments) || !manifestExists
+            ? IdentityLockMode.Exclusive
+            : IdentityLockMode.Shared;
+        await using var identityLock = await AcquireIdentityLockAsync(
+            configDirectory,
+            lockMode,
+            cancellationToken).ConfigureAwait(false);
+        if (identityLock is null)
+        {
+            return Failure(
+                $"GitHub CLI identity '{context.Identity.HostAlias}' is busy with another account operation.",
+                2,
+                context);
+        }
+
         var verification = await VerifyAndRegisterIdentityAsync(
             executable.Path,
             context,
@@ -410,7 +506,17 @@ public sealed class GitHubCliService
                 : $"GitHub CLI exited with code {exitCode} through identity '{context.Identity.HostAlias}'.",
             context.Identity.Id,
             context.Identity.AccountName,
-            configDirectory);
+            configDirectory,
+            new GitHubCliExecutionReceipt(
+                context.Identity.Id,
+                context.Identity.HostAlias,
+                context.Identity.AccountName,
+                context.Service.HostName,
+                context.RepositorySelector,
+                executable.Version,
+                exitCode,
+                (long)Math.Round(process.Duration.TotalMilliseconds),
+                lockMode.ToString()));
     }
 
     public async Task<GitHubCliResolutionResult> ResolveAsync(
@@ -1254,6 +1360,19 @@ public sealed class GitHubCliService
             environment[name] = null;
         }
 
+        foreach (var name in GitOverrideEnvironmentVariables)
+        {
+            environment[name] = null;
+        }
+
+        foreach (var name in Environment.GetEnvironmentVariables().Keys
+                     .Cast<string>()
+                     .Where(name => name.StartsWith("GIT_CONFIG_KEY_", StringComparison.OrdinalIgnoreCase)
+                         || name.StartsWith("GIT_CONFIG_VALUE_", StringComparison.OrdinalIgnoreCase)))
+        {
+            environment[name] = null;
+        }
+
         return environment;
     }
 
@@ -1285,7 +1404,33 @@ public sealed class GitHubCliService
 
     private static string? FindUnsafeWrappedCommand(IReadOnlyList<string> arguments)
     {
-        string? firstCommand = null;
+        var firstCommand = GetFirstCommand(arguments);
+        if (firstCommand is not null
+            && (string.Equals(firstCommand, "auth", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(firstCommand, "config", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(firstCommand, "alias", StringComparison.OrdinalIgnoreCase)))
+        {
+            return $"Wrapped 'gh {firstCommand}' commands are blocked because they can change account selection or per-identity configuration. Use gh-login, gh-logout, or gh-status instead.";
+        }
+
+        if (arguments.Any(argument =>
+                string.Equals(argument, "--hostname", StringComparison.OrdinalIgnoreCase)
+                || argument.StartsWith("--hostname=", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "Wrapped --hostname is blocked because GitKeyRouter selects the GitHub host from the routed identity.";
+        }
+
+        return null;
+    }
+
+    private static bool RequiresExclusiveIdentityOperation(IReadOnlyList<string> arguments)
+        => string.Equals(
+            GetFirstCommand(arguments),
+            "extension",
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string? GetFirstCommand(IReadOnlyList<string> arguments)
+    {
         for (var index = 0; index < arguments.Count; index++)
         {
             var argument = arguments[index];
@@ -1304,23 +1449,7 @@ public sealed class GitHubCliService
                 continue;
             }
 
-            firstCommand = argument;
-            break;
-        }
-
-        if (firstCommand is not null
-            && (string.Equals(firstCommand, "auth", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(firstCommand, "config", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(firstCommand, "alias", StringComparison.OrdinalIgnoreCase)))
-        {
-            return $"Wrapped 'gh {firstCommand}' commands are blocked because they can change account selection or per-identity configuration. Use gh-login or gh-status instead.";
-        }
-
-        if (arguments.Any(argument =>
-                string.Equals(argument, "--hostname", StringComparison.OrdinalIgnoreCase)
-                || argument.StartsWith("--hostname=", StringComparison.OrdinalIgnoreCase)))
-        {
-            return "Wrapped --hostname is blocked because GitKeyRouter selects the GitHub host from the routed identity.";
+            return argument;
         }
 
         return null;
@@ -1566,6 +1695,7 @@ public sealed class GitHubCliService
 
     private static async Task<FileStream?> AcquireIdentityLockAsync(
         string configDirectory,
+        IdentityLockMode mode,
         CancellationToken cancellationToken)
     {
         var lockPath = Path.Combine(configDirectory, ".gitkeyrouter.lock");
@@ -1575,11 +1705,22 @@ public sealed class GitHubCliService
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                if (mode == IdentityLockMode.Shared && !File.Exists(lockPath))
+                {
+                    await using var initializer = new FileStream(
+                        lockPath,
+                        FileMode.OpenOrCreate,
+                        FileAccess.ReadWrite,
+                        FileShare.ReadWrite,
+                        bufferSize: 1,
+                        FileOptions.Asynchronous);
+                }
+
                 return new FileStream(
                     lockPath,
-                    FileMode.OpenOrCreate,
-                    FileAccess.ReadWrite,
-                    FileShare.None,
+                    mode == IdentityLockMode.Exclusive ? FileMode.OpenOrCreate : FileMode.Open,
+                    mode == IdentityLockMode.Exclusive ? FileAccess.ReadWrite : FileAccess.Read,
+                    mode == IdentityLockMode.Exclusive ? FileShare.None : FileShare.Read,
                     bufferSize: 1,
                     FileOptions.Asynchronous);
             }
@@ -1610,6 +1751,12 @@ public sealed class GitHubCliService
             : value;
 
     private sealed record GitTextResult(bool Success, string Text);
+
+    private enum IdentityLockMode
+    {
+        Shared,
+        Exclusive
+    }
 
     private sealed record RemoteSelection(string Name, string Source);
 

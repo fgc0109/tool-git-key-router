@@ -1,3 +1,4 @@
+using GitKeyRouter.Core.Abstractions;
 using GitKeyRouter.Core.Models;
 using GitKeyRouter.Infrastructure.GitHub;
 using GitKeyRouter.Tests.TestSupport;
@@ -38,6 +39,22 @@ public sealed class GitHubCliServiceTests
         Assert.Null(command.EnvironmentVariables["GITHUB_TOKEN"]);
         Assert.Null(command.EnvironmentVariables["GH_ENTERPRISE_TOKEN"]);
         Assert.Null(command.EnvironmentVariables["GITHUB_ENTERPRISE_TOKEN"]);
+        Assert.Null(command.EnvironmentVariables["GIT_DIR"]);
+        Assert.Null(command.EnvironmentVariables["GIT_WORK_TREE"]);
+        Assert.Null(command.EnvironmentVariables["GIT_COMMON_DIR"]);
+        Assert.Null(command.EnvironmentVariables["GIT_SSH"]);
+        Assert.Null(command.EnvironmentVariables["GIT_SSH_COMMAND"]);
+        Assert.Null(command.EnvironmentVariables["GIT_ASKPASS"]);
+        Assert.Null(command.EnvironmentVariables["SSH_ASKPASS"]);
+        Assert.Null(command.EnvironmentVariables["GCM_INTERACTIVE"]);
+        Assert.Null(command.EnvironmentVariables["GIT_CONFIG_GLOBAL"]);
+        Assert.Null(command.EnvironmentVariables["GIT_CONFIG_SYSTEM"]);
+        Assert.Null(command.EnvironmentVariables["GIT_CONFIG_NOSYSTEM"]);
+        Assert.Null(command.EnvironmentVariables["GIT_CONFIG_COUNT"]);
+        Assert.NotNull(result.Receipt);
+        Assert.Equal("Exclusive", result.Receipt.LockMode);
+        Assert.Equal(fixture.Camus.Id, result.Receipt.IdentityId);
+        Assert.Equal("github.com/project-base-mirror/tool-storage-browser", result.Receipt.GitHubRepository);
     }
 
     [Fact]
@@ -489,6 +506,124 @@ public sealed class GitHubCliServiceTests
         Assert.Empty(runner.Requests);
     }
 
+    [Fact]
+    public async Task Run_UsesSharedLockForOrdinaryCommandsAndExclusiveLockForExtensions()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request => IsVerification(request)
+            ? Success(request, fixture.Camus.AccountName)
+            : Success(request));
+        var service = CreateService(fixture, runner);
+        Assert.True((await service.StatusAsync(fixture.Camus.Id, workingDirectory: null)).Success);
+
+        var ordinary = await service.RunAsync(
+            ["repo", "view"],
+            fixture.Camus.Id,
+            temp.Path);
+        var extension = await service.RunAsync(
+            ["extension", "list"],
+            fixture.Camus.Id,
+            temp.Path);
+
+        Assert.True(ordinary.Success);
+        Assert.Equal("Shared", ordinary.Receipt!.LockMode);
+        Assert.True(extension.Success);
+        Assert.Equal("Exclusive", extension.Receipt!.LockMode);
+        Assert.Equal("gh version 2.96.0 (test)", ordinary.Receipt.GitHubCliVersion);
+    }
+
+    [Fact]
+    public async Task Run_AllowsConcurrentCommandsForTheSameVerifiedIdentity()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new ConcurrentCommandRunner(fixture.Camus.AccountName);
+        var service = new GitHubCliService(
+            new InMemoryAppConfigStore { Config = fixture.Config },
+            fixture.Paths,
+            runner,
+            new FixedToolchainService("git.exe", ghPath: "gh.exe"));
+        Assert.True((await service.StatusAsync(fixture.Camus.Id, workingDirectory: null)).Success);
+
+        var first = service.RunAsync(["repo", "view"], fixture.Camus.Id, temp.Path);
+        var second = service.RunAsync(["issue", "list"], fixture.Camus.Id, temp.Path);
+        try
+        {
+            await runner.BothCommandsEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            runner.ReleaseCommands.TrySetResult();
+        }
+
+        var results = await Task.WhenAll(first, second);
+
+        Assert.All(results, result => Assert.True(result.Success));
+        Assert.All(results, result => Assert.Equal("Shared", result.Receipt!.LockMode));
+        Assert.Equal(2, runner.MaximumConcurrentCommands);
+    }
+
+    [Fact]
+    public async Task Logout_CannotBypassAnExistingSharedIdentityLock()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request => IsVerification(request)
+            ? Success(request, fixture.Camus.AccountName)
+            : Success(request));
+        var service = CreateService(fixture, runner);
+        Assert.True((await service.StatusAsync(fixture.Camus.Id, workingDirectory: null)).Success);
+        var configDirectory = service.GetConfigDirectory(fixture.Camus);
+        var lockPath = Path.Combine(configDirectory, ".gitkeyrouter.lock");
+        runner.Requests.Clear();
+
+        await using var sharedLock = new FileStream(
+            lockPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.LogoutAsync(fixture.Camus.Id, cancellation.Token));
+        Assert.Empty(runner.Requests);
+    }
+
+    [Fact]
+    public async Task Run_AllowsDifferentIdentitiesToExecuteConcurrently()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new ConcurrentCommandRunner(fixture.Camus.AccountName);
+        var service = new GitHubCliService(
+            new InMemoryAppConfigStore { Config = fixture.Config },
+            fixture.Paths,
+            runner,
+            new FixedToolchainService("git.exe", ghPath: "gh.exe"));
+        runner.AccountsByConfigDirectory[service.GetConfigDirectory(fixture.Camus)] = fixture.Camus.AccountName;
+        runner.AccountsByConfigDirectory[service.GetConfigDirectory(fixture.Other)] = fixture.Other.AccountName;
+        Assert.True((await service.StatusAsync(fixture.Camus.Id, workingDirectory: null)).Success);
+        Assert.True((await service.StatusAsync(fixture.Other.Id, workingDirectory: null)).Success);
+
+        var first = service.RunAsync(["repo", "view"], fixture.Camus.Id, temp.Path);
+        var second = service.RunAsync(["issue", "list"], fixture.Other.Id, temp.Path);
+        try
+        {
+            await runner.BothCommandsEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            runner.ReleaseCommands.TrySetResult();
+        }
+
+        var results = await Task.WhenAll(first, second);
+
+        Assert.All(results, result => Assert.True(result.Success));
+        Assert.Equal(2, runner.MaximumConcurrentCommands);
+        Assert.NotEqual(results[0].Receipt!.IdentityId, results[1].Receipt!.IdentityId);
+    }
+
     private static GitHubCliService CreateService(Fixture fixture, StubProcessRunner runner)
         => new(
             new InMemoryAppConfigStore { Config = fixture.Config },
@@ -613,4 +748,78 @@ public sealed class GitHubCliServiceTests
         GitIdentity Camus,
         GitIdentity Other,
         TestAppPaths Paths);
+
+    private sealed class ConcurrentCommandRunner : IProcessRunner
+    {
+        private readonly string _accountName;
+        private int _activeCommands;
+        private int _maximumConcurrentCommands;
+
+        public ConcurrentCommandRunner(string accountName)
+        {
+            _accountName = accountName;
+        }
+
+        public TaskCompletionSource BothCommandsEntered { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ReleaseCommands { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Dictionary<string, string> AccountsByConfigDirectory { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public int MaximumConcurrentCommands => Volatile.Read(ref _maximumConcurrentCommands);
+
+        public async Task<ProcessResult> RunAsync(
+            ProcessRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (IsVerification(request))
+            {
+                var configDirectory = request.EnvironmentVariables["GH_CONFIG_DIR"];
+                var accountName = configDirectory is not null
+                    && AccountsByConfigDirectory.TryGetValue(configDirectory, out var configured)
+                        ? configured
+                        : _accountName;
+                return Success(request, accountName);
+            }
+
+            var active = Interlocked.Increment(ref _activeCommands);
+            UpdateMaximum(active);
+            if (active >= 2)
+            {
+                BothCommandsEntered.TrySetResult();
+            }
+
+            try
+            {
+                await ReleaseCommands.Task.WaitAsync(cancellationToken);
+                return new ProcessResult
+                {
+                    ExecutablePath = request.ExecutablePath,
+                    Arguments = request.Arguments,
+                    ExitCode = 0,
+                    Duration = TimeSpan.FromMilliseconds(25)
+                };
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeCommands);
+            }
+        }
+
+        private void UpdateMaximum(int value)
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref _maximumConcurrentCommands);
+                if (current >= value
+                    || Interlocked.CompareExchange(ref _maximumConcurrentCommands, value, current) == current)
+                {
+                    return;
+                }
+            }
+        }
+    }
 }
