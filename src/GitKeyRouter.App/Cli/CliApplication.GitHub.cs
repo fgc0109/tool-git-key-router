@@ -26,16 +26,74 @@ public sealed partial class CliApplication
         string[] args,
         CancellationToken cancellationToken)
     {
-        if (args.Length > 1)
+        var json = args.Contains("--json", StringComparer.OrdinalIgnoreCase);
+        var all = args.Contains("--all", StringComparer.OrdinalIgnoreCase);
+        var selectors = args
+            .Where(argument => !string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(argument, "--all", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (selectors.Count > 1 || (all && selectors.Count > 0)
+            || args.Count(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase)) > 1
+            || args.Count(argument => string.Equals(argument, "--all", StringComparison.OrdinalIgnoreCase)) > 1)
         {
             Console.Error.WriteLine(
-                "Usage: GitKeyRouter.exe gh-status [identity-id-or-host-alias]");
+                "Usage: GitKeyRouter.exe gh-status [identity-id-or-host-alias] [--json] | gh-status --all [--json]");
             return 3;
         }
 
+        if (all)
+        {
+            var results = await _services.GitHubCliService.StatusAllAsync(cancellationToken).ConfigureAwait(false);
+            if (json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    results,
+                    new JsonSerializerOptions { WriteIndented = true }));
+            }
+            else
+            {
+                foreach (var item in results)
+                {
+                    var writer = item.Success ? Console.Out : Console.Error;
+                    writer.WriteLine($"{item.IdentityId ?? "<unknown>"}: {item.Message}");
+                }
+            }
+
+            return results.All(item => item.Success) ? 0 : 2;
+        }
+
         var result = await _services.GitHubCliService.StatusAsync(
-            args.FirstOrDefault(),
+            selectors.FirstOrDefault(),
             Environment.CurrentDirectory,
+            cancellationToken).ConfigureAwait(false);
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                result,
+                new JsonSerializerOptions { WriteIndented = true }));
+            return result.ExitCode;
+        }
+
+        return PrintGitHubCliResult(result, printSuccess: true);
+    }
+
+    private async Task<int> GitHubLogoutAsync(
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        var selectors = args
+            .Where(argument => !string.Equals(argument, "--yes", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (selectors.Count != 1
+            || args.Count(argument => string.Equals(argument, "--yes", StringComparison.OrdinalIgnoreCase)) != 1)
+        {
+            Console.Error.WriteLine(
+                "Usage: GitKeyRouter.exe gh-logout <identity-id-or-host-alias> --yes");
+            return 3;
+        }
+
+        var result = await _services.GitHubCliService.LogoutAsync(
+            selectors[0],
             cancellationToken).ConfigureAwait(false);
         return PrintGitHubCliResult(result, printSuccess: true);
     }

@@ -53,6 +53,7 @@ public sealed partial class CliApplication
             "test-route" => await TestRouteAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "test-ssh" => await TestSshAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh-login" => await GitHubLoginAsync(args[1..], cancellationToken).ConfigureAwait(false),
+            "gh-logout" => await GitHubLogoutAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh-status" => await GitHubStatusAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh-resolve" => await GitHubResolveAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh" => await GitHubAsync(args[1..], cancellationToken).ConfigureAwait(false),
@@ -365,7 +366,9 @@ public sealed partial class CliApplication
         Console.WriteLine("  test-route <namespace> [--service <id-or-host>] [--url <repository-url>] [--connect]");
         Console.WriteLine("  test-ssh <host-alias-or-identity-id> [--verbose]");
         Console.WriteLine("  gh-login <identity-id-or-host-alias>");
-        Console.WriteLine("  gh-status [identity-id-or-host-alias]");
+        Console.WriteLine("  gh-logout <identity-id-or-host-alias> --yes");
+        Console.WriteLine("  gh-status [identity-id-or-host-alias] [--json]");
+        Console.WriteLine("  gh-status --all [--json]");
         Console.WriteLine("  gh-resolve [--identity <identity>] [-R|--repo <host/owner/repo>] [--json]");
         Console.WriteLine("  gh [--identity <identity-id-or-host-alias>] -- <gh-arguments>");
         Console.WriteLine("  version");

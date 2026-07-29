@@ -365,6 +365,130 @@ public sealed class GitHubCliServiceTests
         Assert.False(login.IncludeArgumentsInResult);
     }
 
+    [Fact]
+    public async Task Status_RegistersManifestOnlyAfterVerifiedAccountAndRejectsDirectoryReuse()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request => IsVerification(request)
+            ? Success(request, fixture.Camus.AccountName)
+            : Success(request));
+        var service = CreateService(fixture, runner);
+
+        var verified = await service.StatusAsync(
+            fixture.Camus.HostAlias,
+            workingDirectory: null);
+
+        Assert.True(verified.Success);
+        var manifestPath = Path.Combine(service.GetConfigDirectory(fixture.Camus), "identity.json");
+        Assert.True(File.Exists(manifestPath));
+        var manifestText = await File.ReadAllTextAsync(manifestPath);
+        Assert.Contains(fixture.Camus.Id, manifestText);
+        Assert.Contains(fixture.Camus.AccountName, manifestText);
+        Assert.DoesNotContain("oauth_token", manifestText, StringComparison.OrdinalIgnoreCase);
+
+        await File.WriteAllTextAsync(
+            manifestPath,
+            manifestText.Replace(fixture.Camus.Id, fixture.Other.Id, StringComparison.Ordinal));
+        runner.Requests.Clear();
+
+        var reused = await service.StatusAsync(
+            fixture.Camus.HostAlias,
+            workingDirectory: null);
+
+        Assert.False(reused.Success);
+        Assert.Contains("does not match", reused.Message);
+        Assert.Empty(runner.Requests);
+    }
+
+    [Fact]
+    public async Task Logout_TargetsExpectedAccountAndRemovesOnlyIdentityManifest()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request => IsVerification(request)
+            ? Success(request, fixture.Camus.AccountName)
+            : Success(request));
+        var service = CreateService(fixture, runner);
+        var status = await service.StatusAsync(fixture.Camus.Id, workingDirectory: null);
+        Assert.True(status.Success);
+        var configDirectory = service.GetConfigDirectory(fixture.Camus);
+        var manifestPath = Path.Combine(configDirectory, "identity.json");
+        Assert.True(File.Exists(manifestPath));
+        runner.Requests.Clear();
+
+        var logout = await service.LogoutAsync(fixture.Camus.HostAlias);
+
+        Assert.True(logout.Success);
+        Assert.Single(runner.Requests);
+        Assert.Equal(
+            ["auth", "logout", "--hostname", "github.com", "--user", fixture.Camus.AccountName],
+            runner.Requests[0].Arguments);
+        Assert.Equal(ProcessIoMode.InheritConsole, runner.Requests[0].IoMode);
+        Assert.False(File.Exists(manifestPath));
+        Assert.True(Directory.Exists(configDirectory));
+    }
+
+    [Fact]
+    public async Task StatusAll_ReturnsEveryConfiguredGitHubIdentityWithoutGuessing()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request => IsVerification(request)
+            ? Success(request, fixture.Camus.AccountName)
+            : Success(request));
+        var service = CreateService(fixture, runner);
+
+        var results = await service.StatusAllAsync();
+
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, result => result.IdentityId == fixture.Camus.Id && result.Success);
+        Assert.Contains(results, result => result.IdentityId == fixture.Other.Id && !result.Success);
+    }
+
+    [Theory]
+    [InlineData("github.com:\n    \"oauth_token\": secret-value\n", "oauth_token")]
+    [InlineData("github.com:\n    'oauth_token': secret-value\n", "oauth_token")]
+    public async Task Status_BlocksQuotedPlaintextTokenKeysWithoutReadingValues(
+        string hostsContent,
+        string expectedMessage)
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request => Success(request));
+        var service = CreateService(fixture, runner);
+        var configDirectory = service.GetConfigDirectory(fixture.Camus);
+        Directory.CreateDirectory(configDirectory);
+        await File.WriteAllTextAsync(Path.Combine(configDirectory, "hosts.yml"), hostsContent);
+
+        var result = await service.StatusAsync(fixture.Camus.Id, workingDirectory: null);
+
+        Assert.False(result.Success);
+        Assert.Contains(expectedMessage, result.Message);
+        Assert.DoesNotContain("secret-value", result.Message);
+        Assert.Empty(runner.Requests);
+    }
+
+    [Fact]
+    public async Task Status_RejectsOversizedCredentialMetadataBeforeAccountProbe()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request => Success(request));
+        var service = CreateService(fixture, runner);
+        var configDirectory = service.GetConfigDirectory(fixture.Camus);
+        Directory.CreateDirectory(configDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(configDirectory, "hosts.yml"),
+            new string('x', 1024 * 1024 + 1));
+
+        var result = await service.StatusAsync(fixture.Camus.Id, workingDirectory: null);
+
+        Assert.False(result.Success);
+        Assert.Contains("safety limit", result.Message);
+        Assert.Empty(runner.Requests);
+    }
+
     private static GitHubCliService CreateService(Fixture fixture, StubProcessRunner runner)
         => new(
             new InMemoryAppConfigStore { Config = fixture.Config },

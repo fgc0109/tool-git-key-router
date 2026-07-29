@@ -29,6 +29,7 @@ public sealed class CliCommandPolicyTests
     [InlineData("test-route")]
     [InlineData("test-ssh")]
     [InlineData("gh-login")]
+    [InlineData("gh-logout")]
     [InlineData("gh-status")]
     [InlineData("gh-resolve")]
     [InlineData("gh")]

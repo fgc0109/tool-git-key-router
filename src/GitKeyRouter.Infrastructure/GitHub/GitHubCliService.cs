@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using GitKeyRouter.Core.Abstractions;
 using GitKeyRouter.Core.Models;
@@ -36,6 +37,8 @@ public sealed record GitHubCliResolutionResult(
 public sealed class GitHubCliService
 {
     private static readonly Version MinimumSupportedGitHubCliVersion = new(2, 40, 0);
+    private const int IdentityManifestSchemaVersion = 1;
+    private const long MaximumCredentialMetadataBytes = 1024 * 1024;
 
     private static readonly string[] TokenEnvironmentVariables =
     [
@@ -46,8 +49,17 @@ public sealed class GitHubCliService
     ];
 
     private static readonly Regex PlaintextTokenPattern = new(
-        @"^\s*oauth_token\s*:",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        "^\\s*(?:oauth_token|['\"]oauth_token['\"])\\s*:",
+        RegexOptions.IgnoreCase
+        | RegexOptions.CultureInvariant
+        | RegexOptions.Compiled
+        | RegexOptions.NonBacktracking);
+
+    private static readonly JsonSerializerOptions ManifestJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true
+    };
 
     private readonly IAppConfigStore _configStore;
     private readonly IAppPaths _paths;
@@ -83,7 +95,19 @@ public sealed class GitHubCliService
         }
 
         var configDirectory = GetConfigDirectory(context.Identity);
+        var directoryError = ValidateIdentityDirectory(configDirectory);
+        if (directoryError is not null)
+        {
+            return Failure(directoryError, 2, context);
+        }
+
         Directory.CreateDirectory(configDirectory);
+        var manifestError = ValidateIdentityManifest(configDirectory, context, out _);
+        if (manifestError is not null)
+        {
+            return Failure(manifestError, 2, context);
+        }
+
         await using var identityLock = await AcquireIdentityLockAsync(
             configDirectory,
             cancellationToken).ConfigureAwait(false);
@@ -139,7 +163,103 @@ public sealed class GitHubCliService
             context,
             configDirectory,
             cancellationToken).ConfigureAwait(false);
-        return verification;
+        if (!verification.Success)
+        {
+            return verification;
+        }
+
+        return await RegisterIdentityManifestAsync(
+            configDirectory,
+            context,
+            verification,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<GitHubCliCommandResult> LogoutAsync(
+        string identitySelector,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await ResolveExplicitIdentityAsync(identitySelector, cancellationToken).ConfigureAwait(false);
+        if (!context.Success || context.Identity is null || context.Service is null)
+        {
+            return context.ToCommandResult();
+        }
+
+        var executable = await GetGitHubCliExecutableAsync(cancellationToken).ConfigureAwait(false);
+        if (!executable.Success || executable.Path is null)
+        {
+            return Failure(executable.Error, 2, context);
+        }
+
+        var configDirectory = GetConfigDirectory(context.Identity);
+        var directoryError = ValidateIdentityDirectory(configDirectory);
+        if (directoryError is not null)
+        {
+            return Failure(directoryError, 2, context);
+        }
+
+        var manifestError = ValidateIdentityManifest(configDirectory, context, out _);
+        if (manifestError is not null)
+        {
+            return Failure(manifestError, 2, context);
+        }
+
+        if (!Directory.Exists(configDirectory))
+        {
+            return Failure(
+                $"GitHub CLI identity '{context.Identity.HostAlias}' has no local authentication directory.",
+                2,
+                context);
+        }
+
+        await using var identityLock = await AcquireIdentityLockAsync(
+            configDirectory,
+            cancellationToken).ConfigureAwait(false);
+        if (identityLock is null)
+        {
+            return Failure(
+                $"Another GitHub CLI account operation is already running for identity '{context.Identity.HostAlias}'.",
+                2,
+                context);
+        }
+
+        var process = await _processRunner.RunAsync(new ProcessRequest
+        {
+            ExecutablePath = executable.Path,
+            Arguments =
+            [
+                "auth",
+                "logout",
+                "--hostname",
+                context.Service.HostName,
+                "--user",
+                context.Identity.AccountName
+            ],
+            EnvironmentVariables = BuildEnvironment(configDirectory, context.Service.HostName),
+            IoMode = ProcessIoMode.InheritConsole,
+            CreateNoWindow = false,
+            IncludeArgumentsInResult = false,
+            Timeout = TimeSpan.FromMinutes(5),
+            TerminationWaitTimeout = TimeSpan.FromSeconds(5)
+        }, cancellationToken).ConfigureAwait(false);
+        if (!process.Succeeded)
+        {
+            return Failure(
+                process.StartException is null
+                    ? $"GitHub CLI logout failed with exit code {process.ExitCode?.ToString() ?? "<none>"}."
+                    : $"GitHub CLI logout could not start: {process.StartException.Message}",
+                process.ExitCode ?? 2,
+                context);
+        }
+
+        DeleteIdentityManifest(configDirectory);
+        return new GitHubCliCommandResult(
+            true,
+            0,
+            $"GitHub CLI identity '{context.Identity.HostAlias}' logged out account '{context.Identity.AccountName}'.",
+            context.Identity.Id,
+            context.Identity.AccountName,
+            configDirectory);
     }
 
     public async Task<GitHubCliCommandResult> StatusAsync(
@@ -164,17 +284,32 @@ public sealed class GitHubCliService
         }
 
         var configDirectory = GetConfigDirectory(context.Identity);
-        var plaintextWarning = DetectPlaintextToken(configDirectory);
-        if (plaintextWarning is not null)
-        {
-            return Failure(plaintextWarning, 2, context);
-        }
-
-        return await VerifyAccountAsync(
+        return await VerifyAndRegisterIdentityAsync(
             executable.Path,
             context,
             configDirectory,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<GitHubCliCommandResult>> StatusAllAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var config = await LoadNormalizedConfigAsync(cancellationToken).ConfigureAwait(false);
+        var selectors = config.Identities
+            .Where(identity => IsGitHubIdentity(config, identity))
+            .OrderBy(identity => identity.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Select(identity => identity.Id)
+            .ToList();
+        var results = new List<GitHubCliCommandResult>(selectors.Count);
+        foreach (var selector in selectors)
+        {
+            results.Add(await StatusAsync(
+                selector,
+                workingDirectory: null,
+                cancellationToken).ConfigureAwait(false));
+        }
+
+        return results;
     }
 
     public async Task<GitHubCliCommandResult> RunAsync(
@@ -232,13 +367,7 @@ public sealed class GitHubCliService
         }
 
         var configDirectory = GetConfigDirectory(context.Identity);
-        var plaintextWarning = DetectPlaintextToken(configDirectory);
-        if (plaintextWarning is not null)
-        {
-            return Failure(plaintextWarning, 2, context);
-        }
-
-        var verification = await VerifyAccountAsync(
+        var verification = await VerifyAndRegisterIdentityAsync(
             executable.Path,
             context,
             configDirectory,
@@ -1197,6 +1326,191 @@ public sealed class GitHubCliService
         return null;
     }
 
+    private async Task<GitHubCliCommandResult> VerifyAndRegisterIdentityAsync(
+        string executable,
+        IdentityContext context,
+        string configDirectory,
+        CancellationToken cancellationToken)
+    {
+        var directoryError = ValidateIdentityDirectory(configDirectory);
+        if (directoryError is not null)
+        {
+            return Failure(directoryError, 2, context);
+        }
+
+        var manifestError = ValidateIdentityManifest(configDirectory, context, out _);
+        if (manifestError is not null)
+        {
+            return Failure(manifestError, 2, context);
+        }
+
+        var plaintextWarning = DetectPlaintextToken(configDirectory);
+        if (plaintextWarning is not null)
+        {
+            return Failure(plaintextWarning, 2, context);
+        }
+
+        var verification = await VerifyAccountAsync(
+            executable,
+            context,
+            configDirectory,
+            cancellationToken).ConfigureAwait(false);
+        if (!verification.Success)
+        {
+            return verification;
+        }
+
+        return await RegisterIdentityManifestAsync(
+            configDirectory,
+            context,
+            verification,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<GitHubCliCommandResult> RegisterIdentityManifestAsync(
+        string configDirectory,
+        IdentityContext context,
+        GitHubCliCommandResult verification,
+        CancellationToken cancellationToken)
+    {
+        var manifestError = ValidateIdentityManifest(configDirectory, context, out var exists);
+        if (manifestError is not null)
+        {
+            return Failure(manifestError, 2, context);
+        }
+
+        if (exists)
+        {
+            return verification;
+        }
+
+        Directory.CreateDirectory(configDirectory);
+        var manifestPath = GetIdentityManifestPath(configDirectory);
+        var temporaryPath = manifestPath + $".{Guid.NewGuid():N}.tmp";
+        var manifest = new GitHubCliIdentityManifest(
+            IdentityManifestSchemaVersion,
+            context.Identity!.Id,
+            context.Service!.HostName,
+            context.Identity.HostAlias,
+            context.Identity.AccountName);
+        try
+        {
+            var json = JsonSerializer.Serialize(manifest, ManifestJsonOptions) + Environment.NewLine;
+            await File.WriteAllTextAsync(
+                temporaryPath,
+                json,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                cancellationToken).ConfigureAwait(false);
+            File.Move(temporaryPath, manifestPath, overwrite: false);
+            return verification with
+            {
+                Message = verification.Message + " The isolated identity manifest is registered."
+            };
+        }
+        catch (IOException exception)
+        {
+            return Failure(
+                $"GitHub CLI identity manifest could not be registered safely: {exception.Message}",
+                2,
+                context);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            return Failure(
+                $"GitHub CLI identity manifest could not be registered safely: {exception.Message}",
+                2,
+                context);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch
+            {
+                // The temporary file contains identity metadata only. A later health check reports leftovers.
+            }
+        }
+    }
+
+    private static string? ValidateIdentityDirectory(string configDirectory)
+    {
+        try
+        {
+            if (Directory.Exists(configDirectory)
+                && (File.GetAttributes(configDirectory) & FileAttributes.ReparsePoint) != 0)
+            {
+                return "The GitHub CLI identity directory is a reparse point and cannot be used safely.";
+            }
+        }
+        catch (IOException exception)
+        {
+            return $"The GitHub CLI identity directory could not be inspected safely: {exception.Message}";
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            return $"The GitHub CLI identity directory could not be inspected safely: {exception.Message}";
+        }
+
+        return null;
+    }
+
+    private static string? ValidateIdentityManifest(
+        string configDirectory,
+        IdentityContext context,
+        out bool exists)
+    {
+        exists = false;
+        var manifestPath = GetIdentityManifestPath(configDirectory);
+        if (!File.Exists(manifestPath))
+        {
+            return null;
+        }
+
+        exists = true;
+        try
+        {
+            var info = new FileInfo(manifestPath);
+            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return "The GitHub CLI identity manifest is a reparse point and cannot be trusted.";
+            }
+
+            if (info.Length <= 0 || info.Length > 64 * 1024)
+            {
+                return "The GitHub CLI identity manifest has an invalid size.";
+            }
+
+            var manifest = JsonSerializer.Deserialize<GitHubCliIdentityManifest>(
+                File.ReadAllText(manifestPath),
+                ManifestJsonOptions);
+            if (manifest is null
+                || manifest.SchemaVersion != IdentityManifestSchemaVersion
+                || !string.Equals(manifest.IdentityId, context.Identity!.Id, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(manifest.ServiceHost, context.Service!.HostName, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(manifest.HostAlias, context.Identity.HostAlias, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(manifest.AccountName, context.Identity.AccountName, StringComparison.OrdinalIgnoreCase))
+            {
+                return "The GitHub CLI identity manifest does not match the selected GitKeyRouter identity.";
+            }
+        }
+        catch (JsonException)
+        {
+            return "The GitHub CLI identity manifest is malformed.";
+        }
+        catch (IOException exception)
+        {
+            return $"The GitHub CLI identity manifest could not be inspected safely: {exception.Message}";
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            return $"The GitHub CLI identity manifest could not be inspected safely: {exception.Message}";
+        }
+
+        return null;
+    }
+
     private static string? DetectPlaintextToken(string configDirectory)
     {
         var hostsPath = Path.Combine(configDirectory, "hosts.yml");
@@ -1207,6 +1521,17 @@ public sealed class GitHubCliService
 
         try
         {
+            var info = new FileInfo(hostsPath);
+            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return "GitHub CLI hosts.yml is a reparse point and cannot be inspected safely.";
+            }
+
+            if (info.Length > MaximumCredentialMetadataBytes)
+            {
+                return $"GitHub CLI hosts.yml exceeds the {MaximumCredentialMetadataBytes}-byte safety limit.";
+            }
+
             foreach (var line in File.ReadLines(hostsPath))
             {
                 if (PlaintextTokenPattern.IsMatch(line))
@@ -1225,6 +1550,18 @@ public sealed class GitHubCliService
         }
 
         return null;
+    }
+
+    private static string GetIdentityManifestPath(string configDirectory)
+        => Path.Combine(configDirectory, "identity.json");
+
+    private static void DeleteIdentityManifest(string configDirectory)
+    {
+        var manifestPath = GetIdentityManifestPath(configDirectory);
+        if (File.Exists(manifestPath))
+        {
+            File.Delete(manifestPath);
+        }
     }
 
     private static async Task<FileStream?> AcquireIdentityLockAsync(
@@ -1275,6 +1612,13 @@ public sealed class GitHubCliService
     private sealed record GitTextResult(bool Success, string Text);
 
     private sealed record RemoteSelection(string Name, string Source);
+
+    private sealed record GitHubCliIdentityManifest(
+        int SchemaVersion,
+        string IdentityId,
+        string ServiceHost,
+        string HostAlias,
+        string AccountName);
 
     private sealed record GitHubCliExecutableResult(
         bool Success,
