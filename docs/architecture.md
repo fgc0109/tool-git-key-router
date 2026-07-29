@@ -18,7 +18,7 @@ Contains the WinForms shell, controls, dialogs, CLI dispatcher, and manual compo
 
 Git/OpenSSH commands use `ProcessStartInfo` with `UseShellExecute = false` and add every argument through `ArgumentList`. User-controlled namespaces, aliases, URLs, and paths are not interpolated into `cmd.exe` or PowerShell commands.
 
-`ProcessRunner` reads stdout and stderr asynchronously with independent line limits and a per-line character limit. Truncated output preserves a head and tail summary and sets `StandardOutputTruncated` or `StandardErrorTruncated`. Results distinguish startup failure, user cancellation, timeout, non-zero exit, and process-tree termination failure (`KillFailed` / `TerminationError`).
+`ProcessRunner` reads stdout and stderr asynchronously with independent line limits and a per-line character limit. Truncated output preserves a head and tail summary and sets `StandardOutputTruncated` or `StandardErrorTruncated`. Results distinguish startup failure, user cancellation, timeout, non-zero exit, and process-tree termination failure (`KillFailed` / `TerminationError`). Explicit passthrough requests can instead inherit the attached console for interactive tools; these requests can suppress argument retention and still preserve the child exit code.
 
 Process execution tests launch the repository-owned `GitKeyRouter.ProcessTestChild` executable. Output modes produce fixed stdout/stderr or oversized lines; wait and process-tree modes atomically publish ready files before the test cancels or waits for timeout. This removes shell, network utility, and sub-100-ms scheduling assumptions while retaining a real Windows process-tree integration boundary.
 
@@ -28,7 +28,17 @@ Process execution tests launch the repository-owned `GitKeyRouter.ProcessTestChi
 
 Both test projects use the xUnit v3 executable test-project model (`OutputType=Exe`) and the xUnit VSTest adapter, preserving the existing `dotnet test` and TRX workflow. Package versions are declared once in the root `Directory.Packages.props`; individual project files contain version-free `PackageReference` entries, and checked-in lock files pin the resolved graph for normal and `win-x64` restores.
 
-xUnit v3 analyzer rule `xUnit1051` is temporarily suppressed in both test projects because existing operation-specific cancellation and timeout tests intentionally use dedicated tokens. The suppression is explicit technical debt for the planned analyzer cleanup in v0.4.17; all other compiler and analyzer warnings remain errors when `CI=true`.
+xUnit v3 analyzer rule `xUnit1051` is temporarily suppressed in both test projects because existing operation-specific cancellation and timeout tests intentionally use dedicated tokens. The suppression is explicit technical debt for the replanned analyzer cleanup after v0.4.18; all other compiler and analyzer warnings remain errors when `CI=true`.
+
+## GitHub CLI identity boundary
+
+GitHub CLI routing is optional and supports `gh` 2.40.0 or later. The effective Git push URL, explicit `-R/--repo`, or an explicit identity resolves to one configured GitHub identity. Automatic repository routing requires a unique SSH HostAlias and verifies that the HostAlias agrees with the most specific enabled Service, Owner, or Repository route.
+
+Each identity receives a `GH_CONFIG_DIR` derived from a SHA-256 hash of its stable identity ID. The child process also receives the resolved `GH_HOST` and, when available, the exact `GH_REPO`. Inherited `GH_TOKEN`, `GITHUB_TOKEN`, enterprise token variables, and unrelated repository overrides are removed. GitKeyRouter never calls `gh auth switch`.
+
+Browser login is serialized with a per-identity file lock. After login and before every wrapped command, a captured `gh api user --jq .login` probe must match the configured `AccountName`. The probe arguments and output are not logged. Forwarded commands inherit the console, omit arguments from their process result, and return the original `gh` exit code.
+
+GitHub CLI owns OAuth and credential persistence. GitKeyRouter only checks whether `hosts.yml` contains an `oauth_token` key; it never reads the value, and blocks the identity when plaintext fallback is detected. GitHub CLI directories are outside application configuration, snapshots, and portable backup payloads.
 
 ## Application instance boundary
 

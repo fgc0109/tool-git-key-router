@@ -100,3 +100,9 @@ Before mutation, GitKeyRouter captures the exact current application configurati
 If any step fails or is cancelled after mutation starts, GitKeyRouter restores the original key files, application configuration, SSH Config, Git rewrites, and Git Profile files. Apply and rollback failures are reported separately.
 
 Portable packages contain private keys. Store them only in trusted locations, use a strong unique password, and transfer them through a protected channel.
+
+## GitHub CLI credentials are intentionally excluded
+
+Per-identity GitHub CLI directories under `%APPDATA%\GitKeyRouter\github-cli` are not part of timestamped snapshots or `.gkrbackup` packages. They may reference OAuth credentials owned by GitHub CLI and the operating system credential store, so copying them would cross the application's credential boundary.
+
+After restoring or moving GitKeyRouter to another computer, run `gh-login <identity-id-or-host-alias>` for each GitHub identity that needs API access. SSH keys and Git URL routing can be restored from the portable package, but GitHub CLI authentication must be established independently on the destination computer.

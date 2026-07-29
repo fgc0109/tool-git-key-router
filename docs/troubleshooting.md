@@ -41,6 +41,17 @@ Do not delete or edit that journal before preserving a copy. Resolve the reporte
 
 Diagnostics lists every existing candidate found in PATH and common Windows locations. The first candidate in the documented lookup order is selected; no PATH or installation setting is changed.
 
+## GitHub CLI identity routing is blocked
+
+- Install GitHub CLI 2.40.0 or later. Older versions are rejected because their same-host account model cannot guarantee isolated multi-account routing.
+- Run `GitKeyRouter.exe gh-status <identity-id-or-host-alias>` to verify the configured `AccountName` against `gh api user`.
+- If no login exists, run `GitKeyRouter.exe gh-login <identity-id-or-host-alias>` and complete the browser flow with the expected account.
+- If `hosts.yml` contains a plaintext `oauth_token`, repair the Windows credential store, remove the insecure GitHub CLI login through trusted GitHub CLI tooling, and log in again. GitKeyRouter deliberately does not read or migrate the Token value.
+- Automatic routing rejects repositories whose remotes select different identities, whose selected HostAlias disagrees with the configured route, or whose tracking/push-default/origin remote cannot be determined. Use explicit `--identity` only after reviewing the repository target.
+- `GH_TOKEN`, `GITHUB_TOKEN`, enterprise Token variables, and inherited `GH_REPO` do not override the routed child process. Pass the target through `-R/--repo` instead of environment variables.
+
+Wrapped `gh auth`, `gh config`, `gh alias`, and user-supplied `--hostname` are blocked because they can mutate account selection or bypass the routed host. GitKeyRouter does not log forwarded arguments or output; review the live console before sharing it because the invoked GitHub CLI command may display repository data.
+
 ## Git service SSH returns a non-zero exit code after success
 
 This is normal for some `ssh -T git@host` tests. GitKeyRouter uses the selected GitHub, GitLab, Gitea, or generic provider adapter to classify service-specific authentication responses.

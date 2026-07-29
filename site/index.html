@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#08111f">
   <meta name="color-scheme" content="dark light">
-  <meta name="description" content="GitKeyRouter 是面向 Windows 的本地 Git SSH 身份与仓库路由管理工具。">
+  <meta name="description" content="GitKeyRouter 是面向 Windows 的本地 Git SSH 与 GitHub CLI 多账号身份路由管理工具。">
   <meta property="og:title" content="GitKeyRouter — 让每个仓库自动用对 SSH 身份">
-  <meta property="og:description" content="统一管理多 Git 服务、多 SSH 身份、仓库路由、Git Profiles、备份与恢复。">
+  <meta property="og:description" content="统一管理多 Git 服务、SSH 与 GitHub CLI 身份、仓库路由、Git Profiles、备份与恢复。">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://project-base-mirror.github.io/tool-git-key-router/">
   <meta property="og:image" content="https://project-base-mirror.github.io/tool-git-key-router/social-card.svg">
@@ -47,7 +47,7 @@
         <div class="hero-copy">
           <div class="eyebrow"><span></span> Windows 10 / 11 · .NET 10 · Local-first</div>
           <h1>让每个 Git 仓库<br><em>自动用对 SSH 身份</em></h1>
-          <p class="hero-lead">统一管理多 Git 服务、多账号、SSH 密钥、仓库路由和提交身份。预览每次变更，遇到问题可以恢复，全程留在本机。</p>
+          <p class="hero-lead">统一管理多 Git 服务、多账号、SSH 密钥、GitHub CLI、仓库路由和提交身份。预览每次变更，遇到问题可以恢复，全程留在本机。</p>
           <div class="hero-actions">
             <a class="button button-primary" href="https://github.com/project-base-mirror/tool-git-key-router/releases/latest">
               下载最新版
@@ -55,7 +55,7 @@
             </a>
             <a class="button button-secondary" href="https://github.com/project-base-mirror/tool-git-key-router">查看源码</a>
           </div>
-          <p class="hero-note">开源 · 不需要账户 · 不使用 OAuth 或 PAT · 不上传私钥</p>
+          <p class="hero-note">开源 · 核心 SSH 路由无需 OAuth/PAT · GitHub CLI 凭据独立托管 · 不上传私钥</p>
         </div>
 
         <div class="route-card" aria-label="仓库路由示例">
@@ -139,6 +139,12 @@
             <h3>GUI 与 CLI</h3>
             <p>桌面界面和自动化命令共享同一服务图。诊断、解析、预览和测试命令可以安全用于脚本与 DevRunner。</p>
           </article>
+
+          <article class="feature-card">
+            <div class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 0 1 14 0v6H5v-6Z"/><path d="M9 18v3m6-3v3M8 10h.01M16 10h.01"/></svg></div>
+            <h3>GitHub CLI 身份路由</h3>
+            <p>根据仓库 SSH HostAlias 自动选择独立的 <code>GH_CONFIG_DIR</code>，核验实际 API 账号并阻止并发仓库串号。</p>
+          </article>
         </div>
       </div>
     </section>
@@ -196,7 +202,7 @@
     <section class="download-section" id="download">
       <div class="shell download-card">
         <div>
-          <div class="eyebrow light"><span></span> CURRENT RELEASE · v0.4.15</div>
+          <div class="eyebrow light"><span></span> CURRENT RELEASE · v0.4.17</div>
           <h2>把复杂路由交给 GitKeyRouter</h2>
           <p>Windows x64 提供自包含便携版和依赖 .NET 10 Desktop Runtime 的精简版。下载后解压即可开始。</p>
         </div>
