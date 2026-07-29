@@ -127,7 +127,7 @@ public sealed class GitHubCliServiceTests
     }
 
     [Fact]
-    public async Task Run_RejectsRouteMismatchAndMultipleRemoteIdentities()
+    public async Task Run_RejectsRouteMismatchButIgnoresUnselectedRemoteIdentity()
     {
         using var temp = new TemporaryDirectory();
         var mismatchFixture = CreateFixture(temp.Path);
@@ -164,14 +164,145 @@ public sealed class GitHubCliServiceTests
                     ["backup"] = "git@other-account:other-owner/other-repo.git"
                 }));
 
-        var conflict = await CreateService(conflictFixture, conflictRunner).RunAsync(
-            ["release", "view"],
+        var conflict = await CreateService(conflictFixture, conflictRunner).ResolveAsync(
             explicitIdentity: null,
+            repositorySelector: null,
             workingDirectory: temp.Path);
 
-        Assert.False(conflict.Success);
-        Assert.Contains("different GitKeyRouter identities", conflict.Message);
-        Assert.DoesNotContain(conflictRunner.Requests, request => request.ExecutablePath == "gh.exe");
+        Assert.True(conflict.Success);
+        Assert.Contains(conflict.Warnings!, warning => warning.Contains("backup", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("origin", conflict.RemoteName);
+        Assert.Equal("branch.remote", conflict.RemoteSelectionSource);
+    }
+
+    [Fact]
+    public async Task Resolve_BranchPushRemoteWinsAndReportsDecision()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request =>
+        {
+            if (IsArguments(request, "rev-parse", "--show-toplevel"))
+            {
+                return Success(request, temp.Path);
+            }
+
+            if (IsArguments(request, "remote"))
+            {
+                return Success(request, "origin\npublish");
+            }
+
+            if (IsArguments(request, "symbolic-ref", "--quiet", "--short", "HEAD"))
+            {
+                return Success(request, "main");
+            }
+
+            if (IsArguments(request, "config", "--get", "branch.main.pushRemote"))
+            {
+                return Success(request, "publish");
+            }
+
+            if (IsRemoteUrlRequest(request, "publish"))
+            {
+                return Success(request, "git@camus0109:project-base-mirror/tool-storage-browser.git");
+            }
+
+            if (IsRemoteUrlRequest(request, "origin"))
+            {
+                return Success(request, "git@other-account:other-owner/other-repo.git");
+            }
+
+            return Failure(request);
+        });
+
+        var result = await CreateService(fixture, runner).ResolveAsync(
+            explicitIdentity: null,
+            repositorySelector: null,
+            workingDirectory: temp.Path);
+
+        Assert.True(result.Success);
+        Assert.Equal("publish", result.RemoteName);
+        Assert.Equal("branch.pushRemote", result.RemoteSelectionSource);
+        Assert.Equal(fixture.Camus.HostAlias, result.HostAlias);
+        Assert.Equal("test", result.GitHubCliSource);
+        Assert.Equal(["gh.exe"], result.GitHubCliCandidates);
+        Assert.Contains(result.Warnings!, warning => warning.Contains("origin", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Resolve_RejectsConflictingPushUrlsOnSelectedRemote()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request =>
+        {
+            if (request.ExecutablePath == "git.exe")
+            {
+                if (IsArguments(request, "rev-parse", "--show-toplevel"))
+                {
+                    return Success(request, temp.Path);
+                }
+
+                if (IsArguments(request, "remote"))
+                {
+                    return Success(request, "origin");
+                }
+
+                if (IsArguments(request, "symbolic-ref", "--quiet", "--short", "HEAD"))
+                {
+                    return Success(request, "main");
+                }
+
+                if (IsArguments(request, "config", "--get", "branch.main.remote"))
+                {
+                    return Success(request, "origin");
+                }
+
+                if (IsRemoteUrlRequest(request, "origin"))
+                {
+                    return Success(
+                        request,
+                        "git@camus0109:project-base-mirror/tool-storage-browser.git\n"
+                        + "git@other-account:other-owner/other-repo.git");
+                }
+            }
+
+            return Failure(request);
+        });
+
+        var result = await CreateService(fixture, runner).ResolveAsync(
+            explicitIdentity: null,
+            repositorySelector: null,
+            workingDirectory: temp.Path);
+
+        Assert.False(result.Success);
+        Assert.Contains("different GitHub identities or repositories", result.Message);
+    }
+
+    [Fact]
+    public async Task Resolve_HttpsRemoteFallsBackToUniqueRepositoryRoute()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixture = CreateFixture(temp.Path);
+        var runner = new StubProcessRunner(request => request.ExecutablePath == "git.exe"
+            ? GitResponse(
+                request,
+                temp.Path,
+                ["origin"],
+                new Dictionary<string, string>
+                {
+                    ["origin"] = "https://github.com/project-base-mirror/tool-storage-browser.git"
+                })
+            : Success(request));
+
+        var result = await CreateService(fixture, runner).ResolveAsync(
+            explicitIdentity: null,
+            repositorySelector: null,
+            workingDirectory: temp.Path);
+
+        Assert.True(result.Success);
+        Assert.Equal(fixture.Camus.Id, result.IdentityId);
+        Assert.Equal("github.com/project-base-mirror/tool-storage-browser", result.GitHubRepository);
     }
 
     [Fact]
@@ -314,11 +445,12 @@ public sealed class GitHubCliServiceTests
             return Success(request, "origin");
         }
 
-        if (request.Arguments.Count == 4
+        if (request.Arguments.Count == 5
             && request.Arguments[0] == "remote"
             && request.Arguments[1] == "get-url"
             && request.Arguments[2] == "--push"
-            && urls.TryGetValue(request.Arguments[3], out var url))
+            && request.Arguments[3] == "--all"
+            && urls.TryGetValue(request.Arguments[4], out var url))
         {
             return Success(request, url);
         }
@@ -331,6 +463,9 @@ public sealed class GitHubCliServiceTests
 
     private static bool IsArguments(ProcessRequest request, params string[] expected)
         => request.Arguments.SequenceEqual(expected);
+
+    private static bool IsRemoteUrlRequest(ProcessRequest request, string remote)
+        => IsArguments(request, "remote", "get-url", "--push", "--all", remote);
 
     private static ProcessResult Success(ProcessRequest request, string output = "")
         => new()

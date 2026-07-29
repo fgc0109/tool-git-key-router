@@ -54,6 +54,7 @@ public sealed partial class CliApplication
             "test-ssh" => await TestSshAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh-login" => await GitHubLoginAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh-status" => await GitHubStatusAsync(args[1..], cancellationToken).ConfigureAwait(false),
+            "gh-resolve" => await GitHubResolveAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh" => await GitHubAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "version" or "--version" or "-v" => PrintVersion(),
             "help" or "--help" or "-h" => PrintHelp(),
@@ -365,6 +366,7 @@ public sealed partial class CliApplication
         Console.WriteLine("  test-ssh <host-alias-or-identity-id> [--verbose]");
         Console.WriteLine("  gh-login <identity-id-or-host-alias>");
         Console.WriteLine("  gh-status [identity-id-or-host-alias]");
+        Console.WriteLine("  gh-resolve [--identity <identity>] [-R|--repo <host/owner/repo>] [--json]");
         Console.WriteLine("  gh [--identity <identity-id-or-host-alias>] -- <gh-arguments>");
         Console.WriteLine("  version");
         return 0;

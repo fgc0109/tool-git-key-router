@@ -8,6 +8,8 @@ public sealed class ExecutableInfo
 
     public string? SelectedPath { get; init; }
 
+    public string? SelectedSource { get; init; }
+
     public IReadOnlyList<string> CandidatePaths { get; init; } = [];
 
     public string? Version { get; init; }

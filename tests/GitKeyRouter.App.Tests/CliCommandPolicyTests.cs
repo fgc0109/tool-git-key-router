@@ -30,6 +30,7 @@ public sealed class CliCommandPolicyTests
     [InlineData("test-ssh")]
     [InlineData("gh-login")]
     [InlineData("gh-status")]
+    [InlineData("gh-resolve")]
     [InlineData("gh")]
     [InlineData("apply")]
     [InlineData("apply-profiles")]

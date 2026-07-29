@@ -14,6 +14,25 @@ public sealed record GitHubCliCommandResult(
     string? AccountName = null,
     string? ConfigDirectory = null);
 
+public sealed record GitHubCliResolutionResult(
+    bool Success,
+    int ExitCode,
+    string Message,
+    string? GitHubCliPath = null,
+    string? GitHubCliSource = null,
+    string? GitHubCliVersion = null,
+    IReadOnlyList<string>? GitHubCliCandidates = null,
+    string? RepositoryRoot = null,
+    string? RemoteName = null,
+    string? RemoteSelectionSource = null,
+    IReadOnlyList<string>? PushUrls = null,
+    string? HostAlias = null,
+    string? IdentityId = null,
+    string? AccountName = null,
+    string? GitHubHost = null,
+    string? GitHubRepository = null,
+    IReadOnlyList<string>? Warnings = null);
+
 public sealed class GitHubCliService
 {
     private static readonly Version MinimumSupportedGitHubCliVersion = new(2, 40, 0);
@@ -265,6 +284,69 @@ public sealed class GitHubCliService
             configDirectory);
     }
 
+    public async Task<GitHubCliResolutionResult> ResolveAsync(
+        string? explicitIdentity,
+        string? repositorySelector,
+        string? workingDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        IdentityContext context;
+        if (!string.IsNullOrWhiteSpace(explicitIdentity))
+        {
+            context = await ResolveExplicitIdentityAsync(explicitIdentity, cancellationToken).ConfigureAwait(false);
+            if (context.Success && !string.IsNullOrWhiteSpace(repositorySelector))
+            {
+                context = await ValidateRepositorySelectorAsync(
+                    context,
+                    repositorySelector,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(repositorySelector))
+        {
+            context = await ResolveRepositorySelectorAsync(
+                repositorySelector,
+                cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            context = await ResolveRepositoryIdentityAsync(
+                workingDirectory ?? Environment.CurrentDirectory,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var executable = await GetGitHubCliExecutableAsync(cancellationToken).ConfigureAwait(false);
+        var success = context.Success && executable.Success;
+        var message = success
+            ? $"GitHub CLI resolves to identity '{context.Identity!.HostAlias}' ({context.Identity.AccountName})."
+            : string.Join(
+                Environment.NewLine,
+                new[]
+                {
+                    context.Success ? null : context.Error,
+                    executable.Success ? null : executable.Error
+                }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+        return new GitHubCliResolutionResult(
+            success,
+            success ? 0 : 3,
+            message,
+            executable.Path,
+            executable.Source,
+            executable.Version,
+            executable.CandidatePaths,
+            context.RepositoryRoot,
+            context.RemoteName,
+            context.RemoteSelectionSource,
+            context.PushUrls,
+            context.HostAlias,
+            context.Identity?.Id,
+            context.Identity?.AccountName,
+            context.Service?.HostName,
+            context.RepositorySelector,
+            context.Warnings);
+    }
+
     public string GetConfigDirectory(GitIdentity identity)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity.Id));
@@ -374,41 +456,18 @@ public sealed class GitHubCliService
                 "The repository has no Git remotes; specify --identity explicitly.");
         }
 
-        var remoteUrls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var remoteUrls = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var remoteName in remoteNames)
         {
-            var url = await GetRemoteUrlAsync(
+            var urls = await GetRemoteUrlsAsync(
                 git,
                 repositoryRoot.Text,
                 remoteName,
                 cancellationToken).ConfigureAwait(false);
-            if (url is not null)
+            if (urls.Count > 0)
             {
-                remoteUrls[remoteName] = url;
+                remoteUrls[remoteName] = urls;
             }
-        }
-
-        var aliasedIdentities = new Dictionary<string, GitIdentity>(StringComparer.OrdinalIgnoreCase);
-        foreach (var pair in remoteUrls)
-        {
-            if (TryParseSshRemote(pair.Value, out var hostAlias, out _, out _))
-            {
-                var identity = FindIdentityByHostAlias(config, hostAlias);
-                if (identity is not null)
-                {
-                    aliasedIdentities[pair.Key] = identity;
-                }
-            }
-        }
-
-        var distinctIdentities = aliasedIdentities.Values
-            .Select(identity => identity.Id)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (distinctIdentities.Count > 1)
-        {
-            return IdentityContext.Fail(
-                "The repository has Git remotes routed to different GitKeyRouter identities. Use --identity explicitly.");
         }
 
         var selectedRemote = await SelectRemoteAsync(
@@ -419,60 +478,118 @@ public sealed class GitHubCliService
         if (selectedRemote is null)
         {
             return IdentityContext.Fail(
-                "No tracking remote, remote.pushDefault, or origin remote could be selected. Use --identity explicitly.");
+                "No branch pushRemote, remote.pushDefault, tracking remote, or origin remote could be selected. Use --identity explicitly.");
         }
 
-        if (!remoteUrls.TryGetValue(selectedRemote, out var selectedUrl))
+        if (!remoteUrls.TryGetValue(selectedRemote.Name, out var selectedUrls))
         {
-            selectedUrl = await GetRemoteUrlAsync(
+            selectedUrls = await GetRemoteUrlsAsync(
                 git,
                 repositoryRoot.Text,
-                selectedRemote,
+                selectedRemote.Name,
                 cancellationToken).ConfigureAwait(false);
         }
 
-        if (string.IsNullOrWhiteSpace(selectedUrl)
-            || !TryParseSshRemote(selectedUrl, out var selectedAlias, out var owner, out var repository))
+        if (selectedUrls.Count == 0)
         {
             return IdentityContext.Fail(
-                $"Remote '{selectedRemote}' does not expose a routed SSH HostAlias. Use --identity explicitly.");
+                $"Remote '{selectedRemote.Name}' has no usable push or fetch URL.");
         }
 
-        var selectedIdentity = FindIdentityByHostAlias(config, selectedAlias);
-        if (selectedIdentity is null)
+        IdentityContext? selectedContext = null;
+        string? selectedHostAlias = null;
+        foreach (var selectedUrl in selectedUrls)
         {
-            return IdentityContext.Fail(
-                $"SSH HostAlias '{selectedAlias}' is not a configured GitHub identity.");
+            if (!TryParseRepositoryRemote(
+                    selectedUrl,
+                    out var remoteHost,
+                    out var owner,
+                    out var repository,
+                    out var usesSsh))
+            {
+                return IdentityContext.Fail(
+                    $"Remote '{selectedRemote.Name}' contains an unsupported repository URL.");
+            }
+
+            var aliasedIdentity = usesSsh
+                ? FindIdentityByHostAlias(config, remoteHost)
+                : null;
+            var service = aliasedIdentity is null
+                ? FindGitHubServiceByHost(config, remoteHost)
+                : config.FindService(aliasedIdentity.ServiceInstanceId);
+            if (service is null)
+            {
+                return IdentityContext.Fail(
+                    usesSsh
+                        ? $"SSH HostAlias '{remoteHost}' is not a configured GitHub identity or service host."
+                        : $"HTTPS host '{remoteHost}' is not a configured GitHub service.");
+            }
+
+            var routed = ResolveRoute(config, service, owner, repository);
+            if (!routed.Success || routed.Identity is null)
+            {
+                return routed;
+            }
+
+            if (aliasedIdentity is not null
+                && !string.Equals(
+                    aliasedIdentity.Id,
+                    routed.Identity.Id,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return IdentityContext.Fail(
+                    $"Remote '{selectedRemote.Name}' uses SSH HostAlias '{remoteHost}', but the configured route for '{owner}/{repository}' selects '{routed.Identity.HostAlias}'.");
+            }
+
+            if (selectedContext is not null
+                && (!string.Equals(
+                        selectedContext.Identity!.Id,
+                        routed.Identity.Id,
+                        StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(
+                        selectedContext.RepositorySelector,
+                        routed.RepositorySelector,
+                        StringComparison.OrdinalIgnoreCase)))
+            {
+                return IdentityContext.Fail(
+                    $"Remote '{selectedRemote.Name}' has push URLs that resolve to different GitHub identities or repositories.");
+            }
+
+            selectedContext = routed;
+            selectedHostAlias ??= aliasedIdentity?.HostAlias;
         }
 
-        var identityContext = CreateContext(config, selectedIdentity);
-        if (!identityContext.Success || identityContext.Service is null)
+        var warnings = new List<string>();
+        foreach (var pair in remoteUrls.Where(pair => !string.Equals(
+                     pair.Key,
+                     selectedRemote.Name,
+                     StringComparison.OrdinalIgnoreCase)))
         {
-            return identityContext;
+            var otherIdentity = pair.Value
+                .Select(url => TryParseRepositoryRemote(url, out var host, out _, out _, out var usesSsh)
+                    && usesSsh
+                        ? FindIdentityByHostAlias(config, host)
+                        : null)
+                .FirstOrDefault(identity => identity is not null);
+            if (otherIdentity is not null
+                && !string.Equals(
+                    otherIdentity.Id,
+                    selectedContext!.Identity!.Id,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                warnings.Add(
+                    $"Remote '{pair.Key}' routes to identity '{otherIdentity.HostAlias}', but it is not the selected push remote.");
+            }
         }
 
-        var routed = ResolveRoute(
-            config,
-            identityContext.Service,
-            owner,
-            repository);
-        if (!routed.Success || routed.Identity is null)
+        return selectedContext! with
         {
-            return routed;
-        }
-
-        if (!string.Equals(
-                selectedIdentity.Id,
-                routed.Identity.Id,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return IdentityContext.Fail(
-                $"Remote '{selectedRemote}' uses SSH HostAlias '{selectedAlias}', but the configured route for '{owner}/{repository}' selects '{routed.Identity.HostAlias}'.");
-        }
-
-        return identityContext with
-        {
-            RepositorySelector = routed.RepositorySelector
+            RepositoryRoot = repositoryRoot.Text,
+            RemoteName = selectedRemote.Name,
+            RemoteSelectionSource = selectedRemote.Source,
+            PushUrls = selectedUrls,
+            HostAlias = selectedHostAlias ?? selectedContext!.Identity!.HostAlias,
+            Warnings = warnings
         };
     }
 
@@ -602,22 +719,38 @@ public sealed class GitHubCliService
         var toolchain = await _toolchainService.InspectAsync(cancellationToken).ConfigureAwait(false);
         if (!toolchain.Gh.Exists || string.IsNullOrWhiteSpace(toolchain.Gh.SelectedPath))
         {
-            return GitHubCliExecutableResult.Fail("GitHub CLI (gh.exe) was not found.");
+            return GitHubCliExecutableResult.Fail(
+                "GitHub CLI (gh.exe) was not found.",
+                candidatePaths: toolchain.Gh.CandidatePaths);
         }
 
         if (!TryParseGitHubCliVersion(toolchain.Gh.Version, out var version))
         {
             return GitHubCliExecutableResult.Fail(
-                $"GitHub CLI version could not be determined. Version {MinimumSupportedGitHubCliVersion} or later is required for isolated multi-account routing.");
+                $"GitHub CLI version could not be determined. Version {MinimumSupportedGitHubCliVersion} or later is required for isolated multi-account routing.",
+                toolchain.Gh.SelectedPath,
+                toolchain.Gh.SelectedSource,
+                toolchain.Gh.Version,
+                toolchain.Gh.CandidatePaths);
         }
 
         if (version < MinimumSupportedGitHubCliVersion)
         {
             return GitHubCliExecutableResult.Fail(
-                $"GitHub CLI {version} is not supported. Version {MinimumSupportedGitHubCliVersion} or later is required for isolated multi-account routing.");
+                $"GitHub CLI {version} is not supported. Version {MinimumSupportedGitHubCliVersion} or later is required for isolated multi-account routing.",
+                toolchain.Gh.SelectedPath,
+                toolchain.Gh.SelectedSource,
+                toolchain.Gh.Version,
+                toolchain.Gh.CandidatePaths);
         }
 
-        return new GitHubCliExecutableResult(true, toolchain.Gh.SelectedPath, string.Empty);
+        return new GitHubCliExecutableResult(
+            true,
+            toolchain.Gh.SelectedPath,
+            toolchain.Gh.SelectedSource,
+            toolchain.Gh.Version,
+            toolchain.Gh.CandidatePaths,
+            string.Empty);
     }
 
     private static bool TryParseGitHubCliVersion(string? value, out Version version)
@@ -689,6 +822,16 @@ public sealed class GitHubCliService
         var matches = config.Identities
             .Where(identity => IsGitHubIdentity(config, identity)
                 && string.Equals(identity.HostAlias, hostAlias, StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
+    private static GitServiceInstance? FindGitHubServiceByHost(AppConfig config, string hostName)
+    {
+        var matches = config.GitServices
+            .Where(service => service.ProviderKind == GitProviderKind.GitHub
+                && string.Equals(service.HostName, hostName, StringComparison.OrdinalIgnoreCase))
             .Take(2)
             .ToList();
         return matches.Count == 1 ? matches[0] : null;
@@ -777,9 +920,13 @@ public sealed class GitHubCliService
         repository = string.Empty;
         var value = remoteUrl.Trim();
 
-        if (Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            && string.Equals(uri.Scheme, "ssh", StringComparison.OrdinalIgnoreCase))
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
         {
+            if (!string.Equals(uri.Scheme, "ssh", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
             host = uri.Host;
             return TryParseRepositoryPath(uri.AbsolutePath, out owner, out repository);
         }
@@ -805,6 +952,30 @@ public sealed class GitHubCliService
             && TryParseRepositoryPath(value[(colon + 1)..], out owner, out repository);
     }
 
+    private static bool TryParseRepositoryRemote(
+        string remoteUrl,
+        out string host,
+        out string owner,
+        out string repository,
+        out bool usesSsh)
+    {
+        if (TryParseSshRemote(remoteUrl, out host, out owner, out repository))
+        {
+            usesSsh = true;
+            return true;
+        }
+
+        host = string.Empty;
+        owner = string.Empty;
+        repository = string.Empty;
+        usesSsh = false;
+        return Uri.TryCreate(remoteUrl.Trim(), UriKind.Absolute, out var uri)
+            && (string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+            && (host = uri.Host).Length > 0
+            && TryParseRepositoryPath(uri.AbsolutePath, out owner, out repository);
+    }
+
     private static bool TryParseRepositoryPath(
         string path,
         out string owner,
@@ -824,7 +995,7 @@ public sealed class GitHubCliService
         return owner.Length > 0 && repository.Length > 0;
     }
 
-    private async Task<string?> SelectRemoteAsync(
+    private async Task<RemoteSelection?> SelectRemoteAsync(
         string git,
         string repositoryRoot,
         IReadOnlyCollection<string> remoteNames,
@@ -837,6 +1008,28 @@ public sealed class GitHubCliService
             cancellationToken).ConfigureAwait(false);
         if (branch.Success && branch.Text.Length > 0)
         {
+            var branchPushRemote = await RunGitTextAsync(
+                git,
+                repositoryRoot,
+                ["config", "--get", $"branch.{branch.Text}.pushRemote"],
+                cancellationToken).ConfigureAwait(false);
+            if (branchPushRemote.Success
+                && remoteNames.Contains(branchPushRemote.Text, StringComparer.OrdinalIgnoreCase))
+            {
+                return new RemoteSelection(branchPushRemote.Text, "branch.pushRemote");
+            }
+
+            var pushDefault = await RunGitTextAsync(
+                git,
+                repositoryRoot,
+                ["config", "--get", "remote.pushDefault"],
+                cancellationToken).ConfigureAwait(false);
+            if (pushDefault.Success
+                && remoteNames.Contains(pushDefault.Text, StringComparer.OrdinalIgnoreCase))
+            {
+                return new RemoteSelection(pushDefault.Text, "remote.pushDefault");
+            }
+
             var tracking = await RunGitTextAsync(
                 git,
                 repositoryRoot,
@@ -846,27 +1039,29 @@ public sealed class GitHubCliService
                 && tracking.Text != "."
                 && remoteNames.Contains(tracking.Text, StringComparer.OrdinalIgnoreCase))
             {
-                return tracking.Text;
+                return new RemoteSelection(tracking.Text, "branch.remote");
+            }
+        }
+        else
+        {
+            var pushDefault = await RunGitTextAsync(
+                git,
+                repositoryRoot,
+                ["config", "--get", "remote.pushDefault"],
+                cancellationToken).ConfigureAwait(false);
+            if (pushDefault.Success
+                && remoteNames.Contains(pushDefault.Text, StringComparer.OrdinalIgnoreCase))
+            {
+                return new RemoteSelection(pushDefault.Text, "remote.pushDefault");
             }
         }
 
-        var pushDefault = await RunGitTextAsync(
-            git,
-            repositoryRoot,
-            ["config", "--get", "remote.pushDefault"],
-            cancellationToken).ConfigureAwait(false);
-        if (pushDefault.Success
-            && remoteNames.Contains(pushDefault.Text, StringComparer.OrdinalIgnoreCase))
-        {
-            return pushDefault.Text;
-        }
-
         return remoteNames.Contains("origin", StringComparer.OrdinalIgnoreCase)
-            ? "origin"
+            ? new RemoteSelection("origin", "origin fallback")
             : null;
     }
 
-    private async Task<string?> GetRemoteUrlAsync(
+    private async Task<IReadOnlyList<string>> GetRemoteUrlsAsync(
         string git,
         string repositoryRoot,
         string remote,
@@ -875,19 +1070,19 @@ public sealed class GitHubCliService
         var push = await RunGitTextAsync(
             git,
             repositoryRoot,
-            ["remote", "get-url", "--push", remote],
+            ["remote", "get-url", "--push", "--all", remote],
             cancellationToken).ConfigureAwait(false);
         if (push.Success && push.Text.Length > 0)
         {
-            return push.Text;
+            return SplitLines(push.Text);
         }
 
         var fetch = await RunGitTextAsync(
             git,
             repositoryRoot,
-            ["remote", "get-url", remote],
+            ["remote", "get-url", "--all", remote],
             cancellationToken).ConfigureAwait(false);
-        return fetch.Success && fetch.Text.Length > 0 ? fetch.Text : null;
+        return fetch.Success && fetch.Text.Length > 0 ? SplitLines(fetch.Text) : [];
     }
 
     private async Task<GitTextResult> RunGitTextAsync(
@@ -1079,13 +1274,23 @@ public sealed class GitHubCliService
 
     private sealed record GitTextResult(bool Success, string Text);
 
+    private sealed record RemoteSelection(string Name, string Source);
+
     private sealed record GitHubCliExecutableResult(
         bool Success,
         string? Path,
+        string? Source,
+        string? Version,
+        IReadOnlyList<string> CandidatePaths,
         string Error)
     {
-        public static GitHubCliExecutableResult Fail(string error)
-            => new(false, null, error);
+        public static GitHubCliExecutableResult Fail(
+            string error,
+            string? path = null,
+            string? source = null,
+            string? version = null,
+            IReadOnlyList<string>? candidatePaths = null)
+            => new(false, path, source, version, candidatePaths ?? [], error);
     }
 
     private sealed record IdentityContext(
@@ -1094,7 +1299,13 @@ public sealed class GitHubCliService
         AppConfig? Config,
         GitServiceInstance? Service,
         GitIdentity? Identity,
-        string? RepositorySelector = null)
+        string? RepositorySelector = null,
+        string? RepositoryRoot = null,
+        string? RemoteName = null,
+        string? RemoteSelectionSource = null,
+        IReadOnlyList<string>? PushUrls = null,
+        string? HostAlias = null,
+        IReadOnlyList<string>? Warnings = null)
     {
         public static IdentityContext Fail(string error)
             => new(false, error, null, null, null);

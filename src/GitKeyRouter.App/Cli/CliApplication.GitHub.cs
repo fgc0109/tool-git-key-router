@@ -1,4 +1,5 @@
 using GitKeyRouter.Infrastructure.GitHub;
+using System.Text.Json;
 
 namespace GitKeyRouter.App.Cli;
 
@@ -37,6 +38,114 @@ public sealed partial class CliApplication
             Environment.CurrentDirectory,
             cancellationToken).ConfigureAwait(false);
         return PrintGitHubCliResult(result, printSuccess: true);
+    }
+
+    private async Task<int> GitHubResolveAsync(
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        string? identity = null;
+        string? repository = null;
+        var json = false;
+        for (var index = 0; index < args.Length; index++)
+        {
+            var argument = args[index];
+            if (string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase))
+            {
+                json = true;
+                continue;
+            }
+
+            if (string.Equals(argument, "--identity", StringComparison.OrdinalIgnoreCase))
+            {
+                if (identity is not null || index + 1 >= args.Length)
+                {
+                    return PrintGitHubResolveUsage();
+                }
+
+                identity = args[++index];
+                continue;
+            }
+
+            if (string.Equals(argument, "-R", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(argument, "--repo", StringComparison.OrdinalIgnoreCase))
+            {
+                if (repository is not null || index + 1 >= args.Length)
+                {
+                    return PrintGitHubResolveUsage();
+                }
+
+                repository = args[++index];
+                continue;
+            }
+
+            if (argument.StartsWith("--repo=", StringComparison.OrdinalIgnoreCase))
+            {
+                if (repository is not null)
+                {
+                    return PrintGitHubResolveUsage();
+                }
+
+                repository = argument["--repo=".Length..];
+                continue;
+            }
+
+            if (argument.StartsWith("-R", StringComparison.OrdinalIgnoreCase)
+                && argument.Length > 2)
+            {
+                if (repository is not null)
+                {
+                    return PrintGitHubResolveUsage();
+                }
+
+                repository = argument[2..];
+                continue;
+            }
+
+            return PrintGitHubResolveUsage();
+        }
+
+        var result = await _services.GitHubCliService.ResolveAsync(
+            identity,
+            repository,
+            Environment.CurrentDirectory,
+            cancellationToken).ConfigureAwait(false);
+
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                result,
+                new JsonSerializerOptions { WriteIndented = true }));
+        }
+        else
+        {
+            var writer = result.Success ? Console.Out : Console.Error;
+            writer.WriteLine(result.Message);
+            writer.WriteLine($"gh: {result.GitHubCliPath ?? "<not found>"}");
+            writer.WriteLine($"gh source: {result.GitHubCliSource ?? "<unknown>"}");
+            writer.WriteLine($"gh version: {result.GitHubCliVersion ?? "<unknown>"}");
+            writer.WriteLine($"repository root: {result.RepositoryRoot ?? "<none>"}");
+            writer.WriteLine($"remote: {result.RemoteName ?? "<explicit>"}");
+            writer.WriteLine($"remote source: {result.RemoteSelectionSource ?? "<explicit>"}");
+            writer.WriteLine($"HostAlias: {result.HostAlias ?? "<none>"}");
+            writer.WriteLine($"identity: {result.IdentityId ?? "<none>"}");
+            writer.WriteLine($"account: {result.AccountName ?? "<none>"}");
+            writer.WriteLine($"GH_HOST: {result.GitHubHost ?? "<none>"}");
+            writer.WriteLine($"GH_REPO: {result.GitHubRepository ?? "<none>"}");
+            foreach (var warning in result.Warnings ?? [])
+            {
+                writer.WriteLine($"warning: {warning}");
+            }
+        }
+
+        return result.ExitCode;
+    }
+
+    private static int PrintGitHubResolveUsage()
+    {
+        Console.Error.WriteLine(
+            "Usage: GitKeyRouter.exe gh-resolve [--identity <identity-id-or-host-alias>] [-R|--repo <host/owner/repo>] [--json]");
+        return 3;
     }
 
     private async Task<int> GitHubAsync(

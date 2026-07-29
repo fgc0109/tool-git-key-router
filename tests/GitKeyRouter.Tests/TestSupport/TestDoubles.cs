@@ -210,7 +210,7 @@ internal sealed class FixedToolchainService : IToolchainService
     public Task<ToolchainInfo> InspectAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(new ToolchainInfo
         {
-            Git = new ExecutableInfo { Name = "git.exe", Exists = true, SelectedPath = _gitPath, Version = "test" },
+            Git = new ExecutableInfo { Name = "git.exe", Exists = true, SelectedPath = _gitPath, SelectedSource = "test", Version = "test" },
             Ssh = new ExecutableInfo
             {
                 Name = "ssh.exe",
@@ -228,6 +228,8 @@ internal sealed class FixedToolchainService : IToolchainService
                 Name = "gh.exe",
                 Exists = !string.IsNullOrWhiteSpace(_ghPath),
                 SelectedPath = _ghPath,
+                SelectedSource = "test",
+                CandidatePaths = string.IsNullOrWhiteSpace(_ghPath) ? [] : [_ghPath],
                 Version = _ghVersion
             }
         });
