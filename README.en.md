@@ -27,11 +27,15 @@ The project uses C#, .NET 10, and WinForms without a database, WebView, Node.js,
 
 GitHub Releases provides Windows x64 packages:
 
+- **`GitKeyRouter-v<version>-win-x64-setup.msi` (recommended)**: a self-contained installer including the .NET 10 runtime. It defaults to `C:\Program Files\GitKeyRouter\`, creates a Start menu entry, and offers an optional desktop shortcut.
+- **`GitKeyRouter-v<version>-win-x64-framework-dependent-setup.msi`**: a smaller installer that requires the .NET 10 Desktop Runtime x64.
 - **`GitKeyRouter-v<version>-win-x64-portable.zip`**: a self-contained portable build that includes the .NET runtime and can run after extraction.
 - **`GitKeyRouter-v<version>-win-x64-framework-dependent.zip`**: a smaller framework-dependent build that requires the .NET 10 Desktop Runtime x64 on the target machine.
-- **`SHA256SUMS.txt`**: SHA-256 checksums for both ZIP packages.
+- **`SHA256SUMS.txt`**: SHA-256 checksums for both MSI and both ZIP packages.
 
-Building from source requires the .NET 10 SDK. Normal application use does not require the SDK.
+Both MSI packages use a normal multi-file layout and support in-place upgrades, repair, and uninstall through Windows Installed apps. The wizard allows changing the install directory. If installation fails, look for the newest `MSI*.log` under `%TEMP%`. Both ZIP packages remain single-file applications for portable use.
+
+Building from source requires the .NET 10 SDK. The self-contained MSI and ZIP do not require an SDK or preinstalled runtime for normal use.
 
 ## Safety and operational boundaries
 
@@ -544,7 +548,7 @@ Publish-WinX64-SelfContained.bat
 Publish-WinX64-FrameworkDependent.bat
 ```
 
-All three call `scripts\Publish-WinX64.ps1` and use the same formatting, build, test, publish, and executable-validation pipeline. Each BAT file prints the repository and output directories, opens the actual output folder after success, and keeps the window open with an error message after failure. `Publish-WinX64.bat` also creates versioned ZIP files and `SHA256SUMS.txt` under `artifacts\release`.
+All three call `scripts\Publish-WinX64.ps1` and use the same formatting, build, test, publish, and executable-validation pipeline. Each BAT file prints the repository and output directories, opens the actual output folder after success, and keeps the window open with an error message after failure. `Publish-WinX64.bat` also builds and validates both WiX MSI variants, then creates two versioned MSI packages, two ZIP files, and `SHA256SUMS.txt` under `artifacts\release`.
 
 To temporarily skip tests:
 
@@ -557,8 +561,12 @@ Final output directories:
 ```text
 artifacts\publish\win-x64\                         # Self-contained build with GitKeyRouter.exe
 artifacts\publish\win-x64-framework-dependent\     # Framework-dependent build with GitKeyRouter.exe
-artifacts\release\                                  # Versioned ZIP files and SHA256SUMS.txt
+artifacts\installer-payload\                        # Multi-file payloads dedicated to both installers
+artifacts\installer\                                # Both structurally validated MSI packages
+artifacts\release\                                  # Both MSI, both ZIP, and SHA256SUMS.txt
 ```
+
+Installer validation reads the MSI database and checks the version, upgrade identity, install directory, shortcuts, uninstall metadata, payload files, and runtime boundary. After publishing, the manual `Installer lifecycle` GitHub Actions workflow can exercise silent install, optional cross-version upgrade, installed-version smoke, and uninstall cleanup for both variants while retaining logs as workflow artifacts.
 
 These directories contain local generated artifacts and are ignored by `.gitignore`. They are not copied by commits or branch merges. When publishing from an isolated workspace, artifacts exist only in that workspace; run the BAT file again from the current repository root to create them under the current repository's `artifacts` directory.
 

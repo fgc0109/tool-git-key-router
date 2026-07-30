@@ -27,11 +27,15 @@ GitKeyRouter 是一个面向 Windows 10 / Windows 11 的本地桌面工具，用
 
 GitHub Releases 提供 Windows x64 发布包：
 
+- **`GitKeyRouter-v<version>-win-x64-setup.msi`（推荐）**：自包含安装包，内含 .NET 10 运行时；默认安装到 `C:\Program Files\GitKeyRouter\`，提供开始菜单入口和可选桌面快捷方式。
+- **`GitKeyRouter-v<version>-win-x64-framework-dependent-setup.msi`**：轻量安装包，需要目标机器安装 .NET 10 Desktop Runtime x64。
 - **`GitKeyRouter-v<version>-win-x64-portable.zip`**：自包含便携版，内含 .NET 运行时，解压后可直接运行。
 - **`GitKeyRouter-v<version>-win-x64-framework-dependent.zip`**：体积较小，需要目标机器安装 .NET 10 Desktop Runtime x64。
-- **`SHA256SUMS.txt`**：两个 ZIP 包的 SHA-256 校验值。
+- **`SHA256SUMS.txt`**：两个 MSI 和两个 ZIP 的 SHA-256 校验值。
 
-从源码构建时需要 .NET 10 SDK；普通使用不需要 SDK。
+两个 MSI 都使用普通多文件布局，支持覆盖升级、修复和从 Windows“已安装的应用”卸载；安装目录可在向导中修改。安装失败时可在 `%TEMP%` 查找最新的 `MSI*.log`。两个 ZIP 继续保持单文件 EXE，适合免安装使用。
+
+从源码构建时需要 .NET 10 SDK；普通使用自包含 MSI 或自包含 ZIP 时不需要 SDK 或预装运行时。
 
 ## 安全和操作边界
 
@@ -541,7 +545,7 @@ Publish-WinX64-SelfContained.bat
 Publish-WinX64-FrameworkDependent.bat
 ```
 
-三者都调用 `scripts\Publish-WinX64.ps1`，保持同一套格式化、构建、测试、发布和 EXE 校验逻辑。BAT 会先显示仓库根目录和目标目录，成功后自动打开实际输出文件夹；失败时保留窗口显示错误。`Publish-WinX64.bat` 还会生成 `artifacts\release` 下的版本化 ZIP 与 `SHA256SUMS.txt`。
+三者都调用 `scripts\Publish-WinX64.ps1`，保持同一套格式化、构建、测试、发布和 EXE 校验逻辑。BAT 会先显示仓库根目录和目标目录，成功后自动打开实际输出文件夹；失败时保留窗口显示错误。`Publish-WinX64.bat` 还会构建并检查两种 WiX MSI，并在 `artifacts\release` 生成两个版本化 MSI、两个 ZIP 与 `SHA256SUMS.txt`。
 
 暂时跳过测试：
 
@@ -554,8 +558,12 @@ Publish-WinX64-FrameworkDependent.bat
 ```text
 artifacts\publish\win-x64\                         # 自包含版，包含 GitKeyRouter.exe
 artifacts\publish\win-x64-framework-dependent\     # 依赖框架版，包含 GitKeyRouter.exe
-artifacts\release\                                  # 带版本号的 ZIP 和 SHA256SUMS.txt
+artifacts\installer-payload\                        # 安装器专用的两种多文件负载
+artifacts\installer\                                # 构建并完成结构校验的两个 MSI
+artifacts\release\                                  # 两个 MSI、两个 ZIP 和 SHA256SUMS.txt
 ```
+
+安装器结构检查会读取 MSI 数据库，核对版本、升级码、安装目录、快捷方式、卸载注册信息、负载文件和运行时边界。发布后可手动运行 GitHub Actions 的 `Installer lifecycle` 工作流，对两种 MSI 执行静默安装、可选跨版本升级、已安装程序版本冒烟与卸载清理；日志作为工作流产物保留。
 
 这些目录属于本地生成物并被 `.gitignore` 忽略，不会随 Git 提交或分支合并复制。若在隔离工作区中执行发布，生成物也只存在于该工作区；需要在当前仓库根目录重新运行 BAT 才会出现在当前仓库的 `artifacts` 下。
 

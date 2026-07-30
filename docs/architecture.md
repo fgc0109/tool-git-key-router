@@ -28,7 +28,7 @@ Process execution tests launch the repository-owned `GitKeyRouter.ProcessTestChi
 
 Both test projects use the xUnit v3 executable test-project model (`OutputType=Exe`) and the xUnit VSTest adapter, preserving the existing `dotnet test` and TRX workflow. Package versions are declared once in the root `Directory.Packages.props`; individual project files contain version-free `PackageReference` entries, and checked-in lock files pin the resolved graph for normal and `win-x64` restores.
 
-xUnit v3 analyzer rule `xUnit1051` is temporarily suppressed in both test projects because existing operation-specific cancellation and timeout tests intentionally use dedicated tokens. The suppression is explicit technical debt for the replanned v0.4.22 analyzer cleanup; all other compiler and analyzer warnings remain errors when `CI=true`.
+xUnit v3 analyzer rule `xUnit1051` is temporarily suppressed in both test projects because existing operation-specific cancellation and timeout tests intentionally use dedicated tokens. The suppression is explicit technical debt for the replanned v0.4.23 analyzer cleanup; all other compiler and analyzer warnings remain errors when `CI=true`.
 
 ## GitHub CLI identity boundary
 
@@ -114,5 +114,11 @@ The backup inventory classifies every direct child as complete, pending, damaged
 Git Profile files and the global `include.path` sequence are not part of this general backup format; they use the dedicated persistent transaction journal described above.
 
 Application config, SSH Config, and Git URL rewrites are restored independently. Git rewrite restore performs exact Git configuration operations and never replaces the complete `.gitconfig` file.
+
+## Windows packaging boundary
+
+Portable delivery and installed delivery deliberately use different layouts. Both portable ZIP variants contain a single-file `GitKeyRouter.exe`; the installer pipeline publishes an ordinary multi-file payload so Windows Installer can service individual application and runtime files reliably. The recommended MSI is self-contained, while the framework-dependent MSI omits the .NET runtime and requires the .NET 10 Desktop Runtime x64.
+
+Both MSI variants share one stable upgrade identity, install per machine under `ProgramFiles64Folder`, register uninstall metadata, create a Start menu shortcut, and make the desktop shortcut optional. Release construction reads the MSI database to verify product/version metadata, the install-directory dialog, shortcut and registry tables, multi-file contents, and the expected presence or absence of `coreclr.dll`. The installer lifecycle workflow additionally supports install, cross-version upgrade, installed `--version` smoke, and uninstall verification on a Windows runner. Signing is not implied by MSI packaging and remains a separate supply-chain requirement.
 
 See [Backup and restore](backup-and-restore.md) for the file format and current visibility limitations, and [Optimization status and roadmap](project-optimization-status.md) for remaining work.
