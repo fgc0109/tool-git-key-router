@@ -1,0 +1,17 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerOutputName Condition="'$(InstallerOutputName)' == ''">GitKeyRouter-v$(Version)-win-x64-setup</InstallerOutputName>
+    <InstallerFlavor Condition="'$(InstallerFlavor)' == ''">self-contained</InstallerFlavor>
+    <OutputName>$(InstallerOutputName)</OutputName>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <Cultures>zh-CN</Cultures>
+    <DebugType>None</DebugType>
+    <DefaultCompressionLevel>high</DefaultCompressionLevel>
+    <ApplicationIconPath>$(MSBuildThisFileDirectory)..\src\GitKeyRouter.App\Assets\GitKeyRouter.ico</ApplicationIconPath>
+    <DefineConstants>$(DefineConstants);ProductVersion=$(Version);PayloadDir=$(PayloadDir);ApplicationIconPath=$(ApplicationIconPath);InstallerFlavor=$(InstallerFlavor)</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" />
+  </ItemGroup>
+</Project>

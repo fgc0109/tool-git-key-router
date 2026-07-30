@@ -142,6 +142,10 @@ jobs:
             -PublishDir $publishDir `
             -ChecksumFileName 'GitKeyRouter-win-x64-framework-dependent.sha256'
 
+      - name: Build and validate Windows installers
+        shell: pwsh
+        run: .\scripts\Build-WinX64Installers.ps1 -Version '${{ steps.release.outputs.version }}'
+
       - name: Prepare release assets
         shell: pwsh
         run: .\scripts\Prepare-ReleaseAssets.ps1 -Version '${{ steps.release.outputs.version }}'

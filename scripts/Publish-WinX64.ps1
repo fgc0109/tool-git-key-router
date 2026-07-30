@@ -18,8 +18,15 @@ $selfContainedPublishDir = Join-Path $root 'artifacts\publish\win-x64'
 $frameworkDependentPublishDir = Join-Path $root 'artifacts\publish\win-x64-framework-dependent'
 $releaseOutputDir = Join-Path $root 'artifacts\release'
 $validationScript = Join-Path $PSScriptRoot 'Test-WinX64Publish.ps1'
+$installerScript = Join-Path $PSScriptRoot 'Build-WinX64Installers.ps1'
 $releaseScript = Join-Path $PSScriptRoot 'Prepare-ReleaseAssets.ps1'
 $versionProps = Join-Path $root 'Directory.Build.props'
+
+[xml]$props = Get-Content -LiteralPath $versionProps -Raw
+$version = [string]$props.Project.PropertyGroup.Version
+if ([string]::IsNullOrWhiteSpace($version)) {
+    throw "Version was not found in: $versionProps"
+}
 
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     throw '.NET 10 SDK was not found. This script will not install it automatically.'
@@ -113,10 +120,9 @@ try {
     }
 
     if ($Variant -eq 'All' -and -not $SkipReleaseAssets) {
-        [xml]$props = Get-Content -LiteralPath $versionProps -Raw
-        $version = [string]$props.Project.PropertyGroup.Version
-        if ([string]::IsNullOrWhiteSpace($version)) {
-            throw "Version was not found in: $versionProps"
+        & $installerScript -Version $version
+        if ($LASTEXITCODE -ne 0) {
+            throw "Installer build failed with exit code $LASTEXITCODE."
         }
 
         & $releaseScript -Version $version
@@ -151,7 +157,7 @@ try {
         Write-Host "Framework-dependent binary: $(Join-Path $frameworkDependentPublishDir 'GitKeyRouter.exe')"
     }
     if ($Variant -eq 'All' -and -not $SkipReleaseAssets) {
-        Write-Host "Versioned archives and checksums: $releaseOutputDir"
+        Write-Host "Versioned archives, installers, and checksums: $releaseOutputDir"
     }
     Write-Host "Output folder: $outputDirectoryToOpen"
 

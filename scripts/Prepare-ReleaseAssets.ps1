@@ -5,6 +5,7 @@ param(
     [string]$Version,
 
     [string]$PublishRoot,
+    [string]$InstallerRoot,
     [string]$OutputDirectory
 )
 
@@ -13,6 +14,10 @@ $root = Split-Path -Parent $PSScriptRoot
 
 if ([string]::IsNullOrWhiteSpace($PublishRoot)) {
     $PublishRoot = Join-Path $root 'artifacts\publish'
+}
+
+if ([string]::IsNullOrWhiteSpace($InstallerRoot)) {
+    $InstallerRoot = Join-Path $root 'artifacts\installer'
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
@@ -100,6 +105,27 @@ try {
         $zipPath = Join-Path $OutputDirectory "$assetBaseName.zip"
         Compress-Archive -Path (Join-Path $variantStagingDirectory '*') -DestinationPath $zipPath -CompressionLevel Optimal
         $assets += Get-Item -LiteralPath $zipPath
+    }
+
+    $installerNames = @(
+        "GitKeyRouter-v$Version-win-x64-setup.msi",
+        "GitKeyRouter-v$Version-win-x64-framework-dependent-setup.msi"
+    )
+    $installerFiles = @(Get-ChildItem -LiteralPath $InstallerRoot -File)
+    $actualInstallerNames = @($installerFiles.Name | Sort-Object)
+    $expectedInstallerNames = @($installerNames | Sort-Object)
+    if (($actualInstallerNames -join '|') -cne ($expectedInstallerNames -join '|')) {
+        throw "Expected exactly two versioned MSI files in ${InstallerRoot}; found: $($actualInstallerNames -join ', ')"
+    }
+
+    foreach ($installerName in $installerNames) {
+        $sourceInstaller = Join-Path $InstallerRoot $installerName
+        $destinationInstaller = Join-Path $OutputDirectory $installerName
+        if ((Get-Item -LiteralPath $sourceInstaller).Length -le 0) {
+            throw "Installer is empty: $sourceInstaller"
+        }
+        Copy-Item -LiteralPath $sourceInstaller -Destination $destinationInstaller
+        $assets += Get-Item -LiteralPath $destinationInstaller
     }
 
     $checksumLines = @($assets |

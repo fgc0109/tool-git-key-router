@@ -70,37 +70,86 @@ public sealed class PublishSmokeTests
         Assert.Contains("Repository root:", content, StringComparison.Ordinal);
         Assert.Contains("Self-contained binary:", content, StringComparison.Ordinal);
         Assert.Contains("Framework-dependent binary:", content, StringComparison.Ordinal);
-        Assert.Contains("Versioned archives and checksums:", content, StringComparison.Ordinal);
+        Assert.Contains("Versioned archives, installers, and checksums:", content, StringComparison.Ordinal);
         Assert.Contains("Opening output folder:", content, StringComparison.Ordinal);
         Assert.Contains("explorer.exe", content, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task ManualPublishScript_HasValidPowerShellSyntax()
+    public async Task InstallerPackaging_MatchesTheMultiFileMsiReleaseContract()
     {
         var repositoryRoot = FindRepositoryRoot();
-        var scriptPath = Path.Combine(repositoryRoot, "scripts", "Publish-WinX64.ps1");
-        var quotedScriptPath = scriptPath.Replace("'", "''", StringComparison.Ordinal);
-        var parseCommand = $$"""
-            $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile('{{quotedScriptPath}}', [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) {
-                $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }
-                exit 1
-            }
-            """;
+        var installerProject = await File.ReadAllTextAsync(Path.Combine(
+            repositoryRoot, "installer", "GitKeyRouter.Installer.wixproj"));
+        var installerSource = await File.ReadAllTextAsync(Path.Combine(
+            repositoryRoot, "installer", "Package.wxs"));
+        var buildScript = await File.ReadAllTextAsync(Path.Combine(
+            repositoryRoot, "scripts", "Build-WinX64Installers.ps1"));
+        var validationScript = await File.ReadAllTextAsync(Path.Combine(
+            repositoryRoot, "scripts", "Test-WinX64Installer.ps1"));
+        var lifecycleScript = await File.ReadAllTextAsync(Path.Combine(
+            repositoryRoot, "scripts", "Test-InstallerLifecycle.ps1"));
+        var releaseWorkflow = await File.ReadAllTextAsync(Path.Combine(
+            repositoryRoot, ".github", "workflows", "release.yml"));
+        var lifecycleWorkflow = await File.ReadAllTextAsync(Path.Combine(
+            repositoryRoot, ".github", "workflows", "installer-lifecycle.yml"));
 
-        var result = await RunProcessAsync(
-            "powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-Command", parseCommand],
-            repositoryRoot,
-            TimeSpan.FromSeconds(30),
-            captureOutput: true);
+        Assert.Contains("WixToolset.Sdk/5.0.2", installerProject, StringComparison.Ordinal);
+        Assert.Contains("WixToolset.UI.wixext", installerProject, StringComparison.Ordinal);
+        Assert.Contains("ProgramFiles64Folder", installerSource, StringComparison.Ordinal);
+        Assert.Contains("MajorUpgrade", installerSource, StringComparison.Ordinal);
+        Assert.Contains("8E52C902-B4A2-4635-A1AF-549B3A0CDC21", installerSource, StringComparison.Ordinal);
+        Assert.Contains("GitKeyRouterInstallDirDlg", installerSource, StringComparison.Ordinal);
+        Assert.Contains("DesktopShortcutFeature", installerSource, StringComparison.Ordinal);
+        Assert.Contains("INSTALLERFLAVOR", installerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("LicenseAgreementDlg", installerSource, StringComparison.Ordinal);
+        Assert.Contains("-p:PublishSingleFile=false", buildScript, StringComparison.Ordinal);
+        Assert.Contains("Test-WinX64Installer.ps1", buildScript, StringComparison.Ordinal);
+        Assert.Contains("WindowsInstaller.Installer", validationScript, StringComparison.Ordinal);
+        Assert.Contains("msiexec.exe", lifecycleScript, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Build-WinX64Installers.ps1", releaseWorkflow, StringComparison.Ordinal);
+        Assert.Contains("matrix:", lifecycleWorkflow, StringComparison.Ordinal);
+        Assert.Contains("framework-dependent", lifecycleWorkflow, StringComparison.Ordinal);
+    }
 
-        Assert.True(
-            result.ExitCode == 0,
-            $"Publish-WinX64.ps1 has invalid syntax.{Environment.NewLine}{result.StandardOutput}{Environment.NewLine}{result.StandardError}");
+    [Fact]
+    public async Task ReleaseScripts_HaveValidPowerShellSyntax()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var scriptNames = new[]
+        {
+            "Publish-WinX64.ps1",
+            "Prepare-ReleaseAssets.ps1",
+            "Build-WinX64Installers.ps1",
+            "Test-WinX64Installer.ps1",
+            "Test-InstallerLifecycle.ps1"
+        };
+
+        foreach (var scriptName in scriptNames)
+        {
+            var scriptPath = Path.Combine(repositoryRoot, "scripts", scriptName);
+            var quotedScriptPath = scriptPath.Replace("'", "''", StringComparison.Ordinal);
+            var parseCommand = $$"""
+                $tokens = $null
+                $errors = $null
+                [System.Management.Automation.Language.Parser]::ParseFile('{{quotedScriptPath}}', [ref]$tokens, [ref]$errors) | Out-Null
+                if ($errors.Count -gt 0) {
+                    $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }
+                    exit 1
+                }
+                """;
+
+            var result = await RunProcessAsync(
+                "powershell.exe",
+                ["-NoProfile", "-NonInteractive", "-Command", parseCommand],
+                repositoryRoot,
+                TimeSpan.FromSeconds(30),
+                captureOutput: true);
+
+            Assert.True(
+                result.ExitCode == 0,
+                $"{scriptName} has invalid syntax.{Environment.NewLine}{result.StandardOutput}{Environment.NewLine}{result.StandardError}");
+        }
     }
 
     [Fact]
@@ -125,7 +174,8 @@ public sealed class PublishSmokeTests
             "src/GitKeyRouter.Infrastructure/packages.win-x64.lock.json",
             "src/GitKeyRouter.App/packages.publish-win-x64.lock.json",
             "src/GitKeyRouter.Core/packages.publish-win-x64.lock.json",
-            "src/GitKeyRouter.Infrastructure/packages.publish-win-x64.lock.json"
+            "src/GitKeyRouter.Infrastructure/packages.publish-win-x64.lock.json",
+            "installer/packages.lock.json"
         };
         Assert.All(lockFiles, relativePath => Assert.True(
             File.Exists(Path.Combine(repositoryRoot, relativePath.Replace('/', Path.DirectorySeparatorChar))),
@@ -168,6 +218,7 @@ public sealed class PublishSmokeTests
             "GitKeyRouter.PublishTests",
             Guid.NewGuid().ToString("N"));
         var publishRoot = Path.Combine(temporaryRoot, "publish");
+        var installerDirectory = Path.Combine(temporaryRoot, "installer");
         var releaseDirectory = Path.Combine(temporaryRoot, "release");
         var prepareReleaseScript = Path.Combine(repositoryRoot, "scripts", "Prepare-ReleaseAssets.ps1");
         var versionDocument = XDocument.Load(Path.Combine(repositoryRoot, "Directory.Build.props"));
@@ -256,12 +307,21 @@ public sealed class PublishSmokeTests
                 Assert.Contains(version, versionResult.StandardOutput, StringComparison.OrdinalIgnoreCase);
             }
 
+            Directory.CreateDirectory(installerDirectory);
+            await File.WriteAllBytesAsync(
+                Path.Combine(installerDirectory, $"GitKeyRouter-v{version}-win-x64-setup.msi"),
+                [0xD0, 0xCF, 0x11, 0xE0]);
+            await File.WriteAllBytesAsync(
+                Path.Combine(installerDirectory, $"GitKeyRouter-v{version}-win-x64-framework-dependent-setup.msi"),
+                [0xD0, 0xCF, 0x11, 0xE0]);
+
             var releaseResult = await RunProcessAsync(
                 "powershell.exe",
                 [
                     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                "-File", prepareReleaseScript, "-Version", version,
-                "-PublishRoot", publishRoot, "-OutputDirectory", releaseDirectory
+                    "-File", prepareReleaseScript, "-Version", version,
+                    "-PublishRoot", publishRoot, "-InstallerRoot", installerDirectory,
+                    "-OutputDirectory", releaseDirectory
                 ],
                 repositoryRoot,
                 TimeSpan.FromMinutes(2),
@@ -271,6 +331,8 @@ public sealed class PublishSmokeTests
                 $"Release packaging failed.{Environment.NewLine}{releaseResult.StandardOutput}{Environment.NewLine}{releaseResult.StandardError}");
             Assert.True(File.Exists(Path.Combine(releaseDirectory, $"GitKeyRouter-v{version}-win-x64-portable.zip")));
             Assert.True(File.Exists(Path.Combine(releaseDirectory, $"GitKeyRouter-v{version}-win-x64-framework-dependent.zip")));
+            Assert.True(File.Exists(Path.Combine(releaseDirectory, $"GitKeyRouter-v{version}-win-x64-setup.msi")));
+            Assert.True(File.Exists(Path.Combine(releaseDirectory, $"GitKeyRouter-v{version}-win-x64-framework-dependent-setup.msi")));
             Assert.True(File.Exists(Path.Combine(releaseDirectory, "SHA256SUMS.txt")));
         }
         finally
@@ -413,6 +475,7 @@ public sealed class PublishSmokeTests
             "GitKeyRouter.ReleaseTests",
             Guid.NewGuid().ToString("N"));
         var publishRoot = Path.Combine(temporaryRoot, "publish");
+        var installerRoot = Path.Combine(temporaryRoot, "installer");
         var outputDirectory = Path.Combine(temporaryRoot, "release");
 
         try
@@ -421,12 +484,21 @@ public sealed class PublishSmokeTests
             var frameworkDirectory = Path.Combine(publishRoot, "win-x64-framework-dependent");
             Directory.CreateDirectory(portableDirectory);
             Directory.CreateDirectory(frameworkDirectory);
+            Directory.CreateDirectory(installerRoot);
             await File.WriteAllBytesAsync(
                 Path.Combine(portableDirectory, "GitKeyRouter.exe"),
                 [0x4D, 0x5A, 0x01, 0x02]);
             await File.WriteAllBytesAsync(
                 Path.Combine(frameworkDirectory, "GitKeyRouter.exe"),
                 [0x4D, 0x5A, 0x03, 0x04]);
+            var selfContainedMsi = Path.Combine(
+                installerRoot,
+                "GitKeyRouter-v0.3.0-win-x64-setup.msi");
+            var frameworkMsi = Path.Combine(
+                installerRoot,
+                "GitKeyRouter-v0.3.0-win-x64-framework-dependent-setup.msi");
+            await File.WriteAllBytesAsync(selfContainedMsi, [0xD0, 0xCF, 0x11, 0xE0]);
+            await File.WriteAllBytesAsync(frameworkMsi, [0xD0, 0xCF, 0x11, 0xE0]);
 
             var result = await RunProcessAsync(
                 "powershell.exe",
@@ -441,6 +513,8 @@ public sealed class PublishSmokeTests
                     "0.3.0",
                     "-PublishRoot",
                     publishRoot,
+                    "-InstallerRoot",
+                    installerRoot,
                     "-OutputDirectory",
                     outputDirectory
                 ],
@@ -458,10 +532,18 @@ public sealed class PublishSmokeTests
             var frameworkZip = Path.Combine(
                 outputDirectory,
                 "GitKeyRouter-v0.3.0-win-x64-framework-dependent.zip");
+            var packagedSelfContainedMsi = Path.Combine(
+                outputDirectory,
+                "GitKeyRouter-v0.3.0-win-x64-setup.msi");
+            var packagedFrameworkMsi = Path.Combine(
+                outputDirectory,
+                "GitKeyRouter-v0.3.0-win-x64-framework-dependent-setup.msi");
             var checksumPath = Path.Combine(outputDirectory, "SHA256SUMS.txt");
 
             Assert.True(File.Exists(portableZip));
             Assert.True(File.Exists(frameworkZip));
+            Assert.True(File.Exists(packagedSelfContainedMsi));
+            Assert.True(File.Exists(packagedFrameworkMsi));
             Assert.True(File.Exists(checksumPath));
 
             foreach (var archivePath in new[] { portableZip, frameworkZip })
@@ -474,8 +556,14 @@ public sealed class PublishSmokeTests
             }
 
             var checksumLines = await File.ReadAllLinesAsync(checksumPath);
-            Assert.Equal(2, checksumLines.Length);
-            foreach (var archivePath in new[] { portableZip, frameworkZip })
+            Assert.Equal(4, checksumLines.Length);
+            foreach (var archivePath in new[]
+                     {
+                         portableZip,
+                         frameworkZip,
+                         packagedSelfContainedMsi,
+                         packagedFrameworkMsi
+                     })
             {
                 await using var stream = File.OpenRead(archivePath);
                 var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream));

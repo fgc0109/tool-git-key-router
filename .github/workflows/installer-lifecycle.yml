@@ -1,0 +1,93 @@
+name: Installer lifecycle (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      current_tag:
+        description: Current vX.Y.Z release to install and uninstall
+        required: true
+        default: v0.4.21
+        type: string
+      previous_tag:
+        description: Optional previous release used for an upgrade test
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  installer-lifecycle:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [self-contained, framework-dependent]
+
+    steps:
+      - name: Check out current release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.current_tag }}
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.302
+
+      - name: Download current and optional previous installers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $currentTag = '${{ inputs.current_tag }}'
+          if ($currentTag -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+              throw "Invalid current release tag: $currentTag"
+          }
+
+          $suffix = if ('${{ matrix.flavor }}' -eq 'self-contained') {
+              'win-x64-setup.msi'
+          }
+          else {
+              'win-x64-framework-dependent-setup.msi'
+          }
+
+          New-Item -ItemType Directory -Path './artifacts/installer-current' -Force | Out-Null
+          gh release download $currentTag `
+            --pattern "GitKeyRouter-$currentTag-$suffix" `
+            --dir './artifacts/installer-current'
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to download the current installer.' }
+
+          $previousTag = '${{ inputs.previous_tag }}'
+          if (-not [string]::IsNullOrWhiteSpace($previousTag)) {
+              if ($previousTag -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+                  throw "Invalid previous release tag: $previousTag"
+              }
+              New-Item -ItemType Directory -Path './artifacts/installer-previous' -Force | Out-Null
+              gh release download $previousTag `
+                --pattern "GitKeyRouter-$previousTag-$suffix" `
+                --dir './artifacts/installer-previous'
+              if ($LASTEXITCODE -ne 0) { throw 'Unable to download the previous installer.' }
+          }
+
+      - name: Install, upgrade, smoke, and uninstall
+        shell: pwsh
+        run: |
+          $current = Get-ChildItem './artifacts/installer-current/*.msi' |
+            Select-Object -First 1 -ExpandProperty FullName
+          $previous = Get-ChildItem './artifacts/installer-previous/*.msi' -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+          $parameters = @{ CurrentMsi = $current }
+          if (-not [string]::IsNullOrWhiteSpace($previous)) {
+              $parameters.PreviousMsi = $previous
+          }
+          .\scripts\Test-InstallerLifecycle.ps1 @parameters
+
+      - name: Upload lifecycle logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer-lifecycle-${{ matrix.flavor }}
+          if-no-files-found: warn
+          path: artifacts/installer-lifecycle/**
