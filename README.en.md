@@ -63,6 +63,8 @@ GitKeyRouter is designed around convenient management, transparent state, and re
 - Git for Windows, providing `git.exe`
 - Windows OpenSSH Client or Git for Windows OpenSSH, providing `ssh.exe` and `ssh-keygen.exe`
 
+Git itself must use an OpenSSH backend. PuTTY/Plink does not read the OpenSSH `config`, `IdentityFile`, or `known_hosts` managed by GitKeyRouter. The application checks environment variables and Git configuration, then verifies the actual backend through a Git trace that connects only to a refused local port.
+
 At startup and in the one-click diagnostics page, the application reports for each required tool:
 
 - Whether it exists
@@ -282,6 +284,10 @@ After explicit confirmation, GitKeyRouter runs:
 git ls-remote <original-url> HEAD
 ```
 
+Before network access, GitKeyRouter confirms that Git actually uses OpenSSH. If PuTTY/Plink is detected, it reports the source. A Git-config-based selection can be switched to the detected OpenSSH after diff confirmation; an environment-variable override stops the test and lists the variables that must be cleared externally.
+
+If a first connection fails with `Host key verification failed`, GitKeyRouter scans the server host public keys and displays their SHA-256 fingerprints. Only after the user verifies them through a trusted channel and confirms are they written to `%USERPROFILE%\.ssh\known_hosts`; the connection is then retried. Conflicting entries are never removed or replaced automatically.
+
 The result window shows:
 
 - The actual executable
@@ -378,6 +384,11 @@ GitKeyRouter.exe test-route camus0109 --url https://github.com/camus0109/panel-t
 GitKeyRouter.exe test-route camus0109 --url https://github.com/camus0109/panel-terraria.git --connect
 GitKeyRouter.exe test-ssh github-camus
 GitKeyRouter.exe test-ssh github-camus --verbose
+GitKeyRouter.exe ssh-backend
+GitKeyRouter.exe ssh-backend --use-openssh
+GitKeyRouter.exe ssh-backend --use-openssh --yes
+GitKeyRouter.exe trust-host gitea-cloud
+GitKeyRouter.exe trust-host gitea-cloud --yes
 GitKeyRouter.exe gh-login github-camus
 GitKeyRouter.exe gh-status github-camus
 GitKeyRouter.exe gh-status --all --json
@@ -393,7 +404,7 @@ GitKeyRouter.exe help
 
 `apply` displays the SSH diff and Git rewrite plan by default. Changes are executed only with `--yes`. `apply-profiles` follows the same policy and displays the conditional Git Config diff by default.
 
-The GUI and `apply --yes` / `apply-profiles --yes` share the exclusive lock to prevent cross-process writes. Other CLI commands do not acquire it. `version` / `--version` and `help` / `--help` return before configuration loading or application-service construction, so scripts and release validation can use them while the GUI is running.
+The GUI and confirmed `apply`, `apply-profiles`, `ssh-backend`, and `trust-host` writes share the exclusive lock to prevent cross-process changes. Their preview modes and other read-only CLI commands do not acquire it. `version` / `--version` and `help` / `--help` return before configuration loading or application-service construction, so scripts and release validation can use them while the GUI is running.
 
 `test-route --connect` also requires a real `--url`, preventing the application from sending network requests for an invented repository.
 
@@ -596,6 +607,12 @@ Install Git for Windows or add it to `PATH`. GitKeyRouter does not install it au
 
 Enable OpenSSH Client in Windows Optional Features, or verify that the Git for Windows OpenSSH directory exists.
 
+### Manual `ssh -vT` succeeds but Git for Windows still fails
+
+Run `GitKeyRouter.exe ssh-backend`. If it reports PuTTY/Plink or TortoisePlink, Git and the manual OpenSSH command are using different configuration and host-key stores. Run `ssh-backend --use-openssh` to preview the repair and add `--yes` only after review. If `GIT_SSH_COMMAND`, `GIT_SSH`, or `GIT_SSH_VARIANT` is reported as a blocker, select OpenSSH in Git for Windows or remove the override, then fully exit and restart GitKeyRouter.
+
+Git Extensions, TortoiseGit, and other GUIs may inject PuTTY/Plink settings only into Git processes that they launch. GitKeyRouter cannot read another process's private environment. If GitKeyRouter's real connection test succeeds and only one Git GUI fails, select OpenSSH in that GUI's SSH settings and restart the GUI as well.
+
 ### `Permission denied (publickey)`
 
 Check:
@@ -611,7 +628,7 @@ This usually means SSH Config does not contain `Host github-camus`, or the manag
 
 ### `Host key verification failed`
 
-Check `%USERPROFILE%\.ssh\known_hosts` and the current network environment. GitKeyRouter never deletes host keys automatically.
+This is not a private-key password request. It is either first-use server identity confirmation or an existing-key conflict. The GUI connection test displays scanned SHA-256 fingerprints; the CLI can preview them with `GitKeyRouter.exe trust-host <id-or-host>`. Verify them through an administrator or another trusted channel before adding `--yes`. GitKeyRouter never automatically deletes or replaces a conflicting host key.
 
 ### A URL is not rewritten
 

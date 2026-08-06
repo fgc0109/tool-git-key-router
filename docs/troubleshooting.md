@@ -21,7 +21,7 @@ When termination fails, inspect Task Manager before retrying a write operation; 
 
 ## Another GitKeyRouter instance is running
 
-Exit code `4` is reserved for GUI startup or a confirmed write command (`apply --yes`, `apply-profiles --yes`) that cannot acquire the per-user exclusive lock. Read-only, preview, diagnostic, test, version, and help commands are allowed while the GUI is running.
+Exit code `4` is reserved for GUI startup or a confirmed write command (`apply --yes`, `apply-profiles --yes`, `ssh-backend --use-openssh --yes`, or `trust-host --yes`) that cannot acquire the per-user exclusive lock. Read-only, preview, diagnostic, test, version, and help commands are allowed while the GUI is running.
 
 Do not work around exit code `4` by deleting mutex-related system objects. Finish or close the active GitKeyRouter writer, then retry.
 
@@ -40,6 +40,28 @@ Do not delete or edit that journal before preserving a copy. Resolve the reporte
 ## Multiple executable candidates
 
 Diagnostics lists every existing candidate found in PATH and common Windows locations. The first candidate in the documented lookup order is selected; no PATH or installation setting is changed.
+
+## Manual OpenSSH succeeds but Git for Windows fails
+
+GitKeyRouter routing is based on OpenSSH `HostAlias`, `IdentityFile`, and `known_hosts`. PuTTY/Plink and TortoisePlink use different configuration, arguments, and host-key stores. A successful manual `ssh -vT` therefore does not prove that `git clone`, `fetch`, or `ls-remote` uses the same SSH implementation.
+
+Run `GitKeyRouter.exe ssh-backend`. The inspection checks `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_SSH_VARIANT`, `core.sshCommand`, and `ssh.variant`. When no explicit selection is visible, it runs a bounded `git ls-remote` against `127.0.0.1:1`; the connection is expected to be refused, while Git trace reveals the actual SSH child command without contacting an external server.
+
+- A Git-config-based PuTTY/Plink selection can be previewed with `ssh-backend --use-openssh` and applied only with an additional `--yes`.
+- An environment-variable override cannot be repaired by global Git configuration. Remove or change the reported variable, select OpenSSH in Git for Windows, and restart every process that inherited the old environment.
+- An unknown custom SSH wrapper is not replaced automatically.
+
+Git Extensions, TortoiseGit, and similar clients may inject an SSH choice only into their own Git child processes. Another process's private environment is not observable by GitKeyRouter. If GitKeyRouter's `test-route --connect` succeeds while one GUI client still fails, configure that client itself to use OpenSSH and restart it.
+
+## SSH host key is not trusted
+
+`read_passphrase: requested to askpass` in verbose OpenSSH output is an internal prompt path and does not by itself mean the private key has a passphrase. On a first connection it is commonly the yes/no server-identity prompt.
+
+The GUI scans the configured service endpoint after `Host key verification failed`, displays every accepted key type and SHA-256 fingerprint, and requires explicit confirmation before appending to `%USERPROFILE%\.ssh\known_hosts`. The CLI equivalent is `GitKeyRouter.exe trust-host <id-or-host>` followed by `--yes` only after independent verification.
+
+GitKeyRouter rescans immediately before writing, compares the server key set and the existing file SHA-256 with the preview, preserves existing line endings, and creates a unique backup when the file already exists. A failed post-write verification restores the original bytes or removes the newly created file.
+
+`ssh-keyscan` retrieves what the current network endpoint presents; it does not authenticate that endpoint. Verify fingerprints with the server administrator or another trusted channel. If existing entries disagree with the scan, GitKeyRouter treats the state as a possible server-key change or man-in-the-middle conflict and never removes the old entry automatically. `StrictHostKeyChecking=no` is not used.
 
 ## GitHub CLI identity routing is blocked
 

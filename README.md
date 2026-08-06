@@ -63,6 +63,8 @@ GitKeyRouter 以“管理方便、状态透明、操作可恢复”为目标：
 - Git for Windows：提供 `git.exe`
 - Windows OpenSSH Client 或 Git for Windows OpenSSH：提供 `ssh.exe`、`ssh-keygen.exe`
 
+Git 本身必须使用 OpenSSH 后端。PuTTY/Plink 不读取 GitKeyRouter 管理的 OpenSSH `config`、`IdentityFile` 或 `known_hosts`。程序会检查环境变量、Git 配置，并通过只连接本机拒绝端口的 Git trace 验证实际后端。
+
 程序启动和“一键诊断”会显示三个工具的：
 
 - 是否存在
@@ -282,6 +284,10 @@ git config --global --fixed-value --unset-all <key> <exact-value>
 git ls-remote <original-url> HEAD
 ```
 
+联网前会先确认 Git 实际使用 OpenSSH。发现 PuTTY/Plink 时，程序会显示来源；由 Git 配置造成时可确认切换到检测到的 OpenSSH，由环境变量强制覆盖时会停止并列出必须在外部清理的变量。
+
+首次连接因 `Host key verification failed` 失败时，程序会扫描服务器主机公钥并显示 SHA-256 指纹。用户通过可信渠道核对并确认后，密钥才会写入 `%USERPROFILE%\.ssh\known_hosts`，随后自动重试。冲突记录不会自动删除或覆盖。
+
 结果窗口显示：
 
 - 实际 executable
@@ -382,6 +388,11 @@ GitKeyRouter.exe test-route camus0109 --url https://github.com/camus0109/panel-t
 GitKeyRouter.exe test-route camus0109 --url https://github.com/camus0109/panel-terraria.git --connect
 GitKeyRouter.exe test-ssh github-camus
 GitKeyRouter.exe test-ssh github-camus --verbose
+GitKeyRouter.exe ssh-backend
+GitKeyRouter.exe ssh-backend --use-openssh
+GitKeyRouter.exe ssh-backend --use-openssh --yes
+GitKeyRouter.exe trust-host gitea-cloud
+GitKeyRouter.exe trust-host gitea-cloud --yes
 GitKeyRouter.exe gh-login github-camus
 GitKeyRouter.exe gh-status github-camus
 GitKeyRouter.exe gh-status --all --json
@@ -399,7 +410,7 @@ GitKeyRouter.exe help
 
 配置写入会校验加载时的文件存在状态和 SHA-256；如果配置被其他程序替换或编辑，本次保存会拒绝覆盖并要求重新加载。Git rewrite 计划也保存所有受影响 key 在预览时的精确有序值，应用时只要这些值发生变化就拒绝旧计划；计划外 key 的变化不受影响。
 
-GUI 与带 `--yes` 的 `apply` / `apply-profiles` 共享排他锁，防止跨进程并发写入。其余 CLI 命令不取得该锁；`version` / `--version` 和 `help` / `--help` 还会在加载配置与创建应用服务之前直接返回，因此 GUI 运行时仍可用于脚本和发布验证。
+GUI 与带 `--yes` 的 `apply` / `apply-profiles` / `ssh-backend` / `trust-host` 共享排他锁，防止跨进程并发写入。上述命令的预览模式及其余只读 CLI 不取得该锁；`version` / `--version` 和 `help` / `--help` 还会在加载配置与创建应用服务之前直接返回，因此 GUI 运行时仍可用于脚本和发布验证。
 
 `test-route --connect` 必须同时提供真实 `--url`，避免程序对虚构仓库发起网络请求。
 
@@ -593,6 +604,12 @@ GIT_CONFIG_GLOBAL=<temporary-file>
 
 在 Windows“可选功能”中启用 OpenSSH Client，或确认 Git for Windows 的 OpenSSH 目录存在。
 
+### 手工 `ssh -vT` 成功，但 Git for Windows 仍失败
+
+先运行 `GitKeyRouter.exe ssh-backend`。如果结果为 PuTTY/Plink 或 TortoisePlink，Git 与手工 OpenSSH 使用的是两套配置和主机密钥存储。可运行 `ssh-backend --use-openssh` 查看修复预览，确认无误后加 `--yes`；如果报告 `GIT_SSH_COMMAND`、`GIT_SSH` 或 `GIT_SSH_VARIANT` 阻止项，请在 Git for Windows/系统环境中切换为 OpenSSH，完全退出并重启 GitKeyRouter。
+
+Git Extensions、TortoiseGit 等 GUI 还可能只给自己启动的 Git 子进程注入 PuTTY/Plink 设置，这种其他进程的私有环境无法由 GitKeyRouter 读取。如果 GitKeyRouter 的实际连接测试成功、只有某个 Git GUI 失败，请同时在该 GUI 的 SSH 设置中选择 OpenSSH 并重启 GUI。
+
 ### Permission denied (publickey)
 
 检查：
@@ -608,7 +625,7 @@ GIT_CONFIG_GLOBAL=<temporary-file>
 
 ### Host key verification failed
 
-检查 `%USERPROFILE%\.ssh\known_hosts` 和当前网络环境。GitKeyRouter 不会自动删除 host key。
+这不是私钥密码提示，而是首次连接的服务器身份确认或已有记录冲突。GUI 连接测试会显示扫描到的 SHA-256 指纹；CLI 可运行 `GitKeyRouter.exe trust-host <id-or-host>` 预览。通过管理员或其他可信渠道核对后再加 `--yes` 写入。已有记录与扫描结果冲突时 GitKeyRouter 不会自动删除或覆盖旧 host key。
 
 ### URL 没有被重写
 

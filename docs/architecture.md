@@ -48,7 +48,7 @@ GitHub CLI owns OAuth and credential persistence. GitKeyRouter bounds credential
 
 ## Application instance boundary
 
-GUI startup and confirmed write commands (`apply --yes`, `apply-profiles --yes`) share a per-Windows-user mutex. Read-only, preview, diagnostic, parsing, and connection-test CLI commands do not take the exclusive lock. Version and help commands return before application-service construction.
+GUI startup and confirmed write commands (`apply --yes`, `apply-profiles --yes`, `ssh-backend --use-openssh --yes`, and `trust-host --yes`) share a per-Windows-user mutex. Read-only, preview, diagnostic, parsing, and connection-test CLI commands do not take the exclusive lock. Version and help commands return before application-service construction.
 
 The mutex prevents concurrent GitKeyRouter writers; it does not replace file/rewrite conflict detection for external editors, Git tools, or synchronization software.
 
@@ -92,6 +92,14 @@ Two synchronization modes are intentionally distinct:
 - Strict synchronization also removes complete orphan GitKeyRouter managed blocks after an explicit diff and confirmation.
 
 Strict mode does not delete ordinary `Host` entries, comments, unmanaged text, or incomplete marker fragments. SSH previews record original file existence and SHA-256 and are rejected if the file changes before apply.
+
+## Git SSH backend and host trust
+
+Managed SSH aliases are an OpenSSH feature, so Git routing has a hard compatibility boundary: the Git child process must use OpenSSH. `GitSshBackendService` resolves explicit environment and Git configuration first. When neither identifies the backend, it executes a bounded Git probe against the refused local endpoint `127.0.0.1:1` with tracing enabled and classifies the actual SSH child command. This probe does not contact an external host and disables terminal/ASKPASS interaction.
+
+PuTTY/Plink is blocked before a repository connection test. A confirmed repair writes only global `core.sshCommand` and `ssh.variant`, rechecks the preview immediately before mutation, verifies the resolved backend afterward, and attempts to restore the prior ordered global values if either write or verification fails. Environment overrides and unknown custom wrappers are not changed automatically.
+
+`SshHostTrustService` is separate from user-key authentication. It obtains server public keys with the `ssh-keyscan.exe` located beside the selected OpenSSH tools, validates their key blobs, and computes SHA-256 fingerprints in process. Trust is a preview/apply operation over both the scanned key set and the `known_hosts` existence/SHA-256 token. Conflicting existing keys fail closed. Confirmed writes append only the reviewed endpoint keys, preserve the existing newline style, create a byte-preserving backup when applicable, then re-read through `ssh-keygen -F`; verification failure rolls back the file. The service never disables strict host verification.
 
 ## Git URL rewrite reconciliation
 
