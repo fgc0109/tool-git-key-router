@@ -1,6 +1,7 @@
 using GitKeyRouter.App.Forms;
 using GitKeyRouter.App.Presentation;
 using GitKeyRouter.Core.Models;
+using GitKeyRouter.Core.Services;
 
 namespace GitKeyRouter.App.Controls;
 
@@ -220,8 +221,25 @@ public sealed class GitRewritesControl : UserControl, IAsyncRefreshable
             return;
         }
 
+        if (!await GitSshBackendUi.EnsureOpenSshAsync(this, _services))
+        {
+            _status("Git 未使用兼容的 OpenSSH 后端，连接测试已停止");
+            return;
+        }
+
         _status("正在执行 git ls-remote...");
-        var result = await _services.GitUrlRewriteService.TestRemoteRouteAsync(_urlInput.Text.Trim());
+        var remoteUrl = _urlInput.Text.Trim();
+        var result = await _services.GitUrlRewriteService.TestRemoteRouteAsync(remoteUrl);
+        var failedService = result.Service;
+        if (!result.AuthenticationSucceeded
+            && failedService is not null
+            && SshHostTrustService.IsHostKeyVerificationFailure(result.Process)
+            && await SshHostTrustUi.PromptAndTrustAsync(this, _services, failedService))
+        {
+            _status("主机密钥已信任，正在重新执行 git ls-remote...");
+            result = await _services.GitUrlRewriteService.TestRemoteRouteAsync(remoteUrl);
+        }
+
         CommandResultForm.ShowProcess(this, $"git ls-remote - {result.Classification}", result.Process);
         _status(result.AuthenticationSucceeded ? "SSH 公钥认证已确认" : result.Classification);
     }

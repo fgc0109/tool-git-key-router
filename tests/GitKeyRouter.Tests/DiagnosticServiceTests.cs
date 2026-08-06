@@ -231,6 +231,60 @@ public sealed class DiagnosticServiceTests
         Assert.Contains("Diff:", mismatch.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task ReportsPuttyGitBackendAsIncompatibleError()
+    {
+        using var directory = new TemporaryDirectory();
+        var paths = new TestAppPaths(directory.Path);
+        var configStore = new InMemoryAppConfigStore();
+        var fileSystem = new PhysicalFileSystem();
+        var backup = new NoOpBackupService();
+        var toolchain = new FixedToolchainService("git.exe", "ssh-keygen.exe", "ssh.exe");
+        var runner = new StubProcessRunner(request =>
+        {
+            if (request.Arguments.SequenceEqual(["config", "--show-origin", "--get", "core.sshCommand"]))
+            {
+                return new ProcessResult
+                {
+                    ExecutablePath = request.ExecutablePath,
+                    ExitCode = 0,
+                    StandardOutput = "file:C:/Users/test/.gitconfig\tC:/Tools/plink.exe"
+                };
+            }
+
+            return new ProcessResult
+            {
+                ExecutablePath = request.ExecutablePath,
+                ExitCode = 1
+            };
+        });
+        var gitBackend = new GitSshBackendService(
+            runner,
+            toolchain,
+            new Dictionary<string, string?>
+            {
+                ["GIT_SSH_COMMAND"] = null,
+                ["GIT_SSH"] = null,
+                ["GIT_SSH_VARIANT"] = null
+            });
+        var diagnostics = new DiagnosticService(
+            configStore,
+            paths,
+            fileSystem,
+            toolchain,
+            new SshConfigService(fileSystem, paths, backup),
+            new GitUrlRewriteService(configStore, new FakeGitUrlRewriteStore(), backup),
+            new TestClock(),
+            gitSshBackendService: gitBackend);
+
+        var report = await diagnostics.RunAsync();
+
+        var backend = Assert.Single(report.Items, item => item.Code == "GIT_SSH_BACKEND_INCOMPATIBLE");
+        Assert.Equal(DiagnosticSeverity.Error, backend.Severity);
+        Assert.Contains("PuTTY/Plink", backend.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("C:/Tools", backend.Message, StringComparison.Ordinal);
+    }
+
     private static GitIdentity Identity(
         string id,
         string displayName,

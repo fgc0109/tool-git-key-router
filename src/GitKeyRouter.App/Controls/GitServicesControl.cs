@@ -2,6 +2,7 @@ using System.Text;
 using GitKeyRouter.App.Forms;
 using GitKeyRouter.App.Presentation;
 using GitKeyRouter.Core.Models;
+using GitKeyRouter.Core.Services;
 
 namespace GitKeyRouter.App.Controls;
 
@@ -232,6 +233,19 @@ public sealed class GitServicesControl : UserControl, IAsyncRefreshable
         {
             UiHelpers.ShowErrors(this, result);
             return;
+        }
+
+        if (!result.Value.Authenticated
+            && SshHostTrustService.IsHostKeyVerificationFailure(result.Value.Process)
+            && await SshHostTrustUi.PromptAndTrustAsync(this, _services, selected))
+        {
+            _status("主机密钥已信任，正在重新测试 Git 服务...");
+            result = await _services.GitServiceService.TestConnectionAsync(selected);
+            if (!result.Success || result.Value is null)
+            {
+                UiHelpers.ShowErrors(this, result);
+                return;
+            }
         }
 
         CommandResultForm.ShowProcess(this, $"{selected.DisplayName} - {result.Value.Classification}", result.Value.Process);

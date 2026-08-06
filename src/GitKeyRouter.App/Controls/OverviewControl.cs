@@ -183,8 +183,26 @@ public sealed class OverviewControl : UserControl, IAsyncRefreshable
                 OverviewStatusKind.Warning);
         }
 
+
+        var backend = await _services.GitSshBackendService.InspectAsync();
+        if (!backend.Success || backend.Value is null)
+        {
+            return new OverviewCardState(
+                "Git SSH 后端无法识别；请进入诊断检查 Git SSH 环境覆盖和全局配置",
+                "需要注意",
+                OverviewStatusKind.Warning);
+        }
+
+        if (!backend.Value.IsOpenSsh)
+        {
+            return new OverviewCardState(
+                $"Git 当前使用 {backend.Value.DisplayName}（{backend.Value.Source}）；它不会读取 GitKeyRouter 的 OpenSSH HostAlias、IdentityFile 和 known_hosts",
+                "SSH 后端不兼容",
+                OverviewStatusKind.Error);
+        }
+
         return new OverviewCardState(
-            "Git、SSH、ssh-keygen 和 winget 均已检测到，可执行核心操作",
+            "Git、OpenSSH、ssh-keygen 和 winget 均已检测到，Git SSH 后端兼容",
             "正常",
             OverviewStatusKind.Normal);
     }

@@ -831,9 +831,9 @@ public sealed partial class SshKeyService
             return "Host alias or DNS resolution failed";
         }
 
-        if (output.Contains("Host key verification failed", StringComparison.OrdinalIgnoreCase))
+        if (SshHostTrustService.IsHostKeyVerificationFailure(process))
         {
-            return "Host key verification failed";
+            return "SSH server host key is not trusted or conflicts with known_hosts";
         }
 
         return "Unknown SSH result";

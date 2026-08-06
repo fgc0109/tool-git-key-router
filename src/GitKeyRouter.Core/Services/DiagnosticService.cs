@@ -14,6 +14,7 @@ public sealed partial class DiagnosticService
     private readonly GitUrlRewriteService _gitUrlRewriteService;
     private readonly IClock _clock;
     private readonly GitProviderAdapterRegistry _providers;
+    private readonly GitSshBackendService? _gitSshBackendService;
 
     public DiagnosticService(
         IAppConfigStore configStore,
@@ -23,7 +24,8 @@ public sealed partial class DiagnosticService
         SshConfigService sshConfigService,
         GitUrlRewriteService gitUrlRewriteService,
         IClock clock,
-        GitProviderAdapterRegistry? providers = null)
+        GitProviderAdapterRegistry? providers = null,
+        GitSshBackendService? gitSshBackendService = null)
     {
         _configStore = configStore;
         _paths = paths;
@@ -33,6 +35,7 @@ public sealed partial class DiagnosticService
         _gitUrlRewriteService = gitUrlRewriteService;
         _clock = clock;
         _providers = providers ?? GitProviderAdapterRegistry.CreateDefault();
+        _gitSshBackendService = gitSshBackendService;
     }
 
     public async Task<DiagnosticReport> RunAsync(CancellationToken cancellationToken = default)
@@ -450,6 +453,43 @@ public sealed partial class DiagnosticService
     {
         try
         {
+            if (_gitSshBackendService is not null)
+            {
+                var backend = await _gitSshBackendService.InspectAsync(cancellationToken).ConfigureAwait(false);
+                if (!backend.Success || backend.Value is null)
+                {
+                    Add(report, "GIT_SSH_BACKEND_UNKNOWN", "Environment", "Git SSH backend could not be resolved",
+                        string.Join(Environment.NewLine, backend.Errors.Prepend(backend.Message)),
+                        DiagnosticSeverity.Warning,
+                        "Inspect GIT_SSH_COMMAND, GIT_SSH, GIT_SSH_VARIANT, core.sshCommand, and ssh.variant.");
+                }
+                else
+                {
+                    var value = backend.Value;
+                    var detailLines = new List<string>
+                    {
+                        $"Backend: {value.DisplayName}",
+                        $"Source: {value.Source}",
+                        $"Executable: {value.EffectiveExecutable ?? "<Git default>"}",
+                        $"Variant: {value.EffectiveVariant ?? "<automatic>"}",
+                        $"Detected OpenSSH: {value.SelectedOpenSshPath ?? "<not found>"}"
+                    };
+                    detailLines.AddRange(value.EnvironmentBlockers.Select(name => $"Environment blocker: {name}"));
+                    var details = string.Join(Environment.NewLine, detailLines);
+                    Add(report,
+                        value.IsOpenSsh ? "GIT_SSH_BACKEND_OPENSSH" : "GIT_SSH_BACKEND_INCOMPATIBLE",
+                        "Environment",
+                        "Git SSH backend",
+                        details,
+                        value.IsOpenSsh ? DiagnosticSeverity.Normal : DiagnosticSeverity.Error,
+                        value.IsOpenSsh
+                            ? null
+                            : value.EnvironmentBlockers.Count > 0
+                                ? "Remove the listed Git SSH environment overrides, select OpenSSH in Git for Windows, restart GitKeyRouter, and run diagnostics again."
+                                : "Switch Git to OpenSSH. PuTTY/Plink does not read GitKeyRouter's OpenSSH config or known_hosts files.");
+                }
+            }
+
             var originsResult = await _gitUrlRewriteService.GetGlobalConfigOriginsAsync(cancellationToken).ConfigureAwait(false);
             if (originsResult.Success)
             {

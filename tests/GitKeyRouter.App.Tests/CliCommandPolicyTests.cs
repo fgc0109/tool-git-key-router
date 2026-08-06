@@ -35,6 +35,8 @@ public sealed class CliCommandPolicyTests
     [InlineData("gh")]
     [InlineData("apply")]
     [InlineData("apply-profiles")]
+    [InlineData("ssh-backend")]
+    [InlineData("trust-host")]
     public void ReadOnlyAndPreviewCommandsDoNotTakeExclusiveInstanceLock(string command)
     {
         Assert.False(CliApplication.CanRunWithoutServices([command]));
@@ -44,6 +46,8 @@ public sealed class CliCommandPolicyTests
     [Theory]
     [InlineData("apply")]
     [InlineData("APPLY-PROFILES")]
+    [InlineData("SSH-BACKEND")]
+    [InlineData("TRUST-HOST")]
     public void ConfirmedMutatingCommandsTakeExclusiveInstanceLock(string command)
     {
         Assert.True(CliApplication.RequiresExclusiveInstance([command, "--YES"]));

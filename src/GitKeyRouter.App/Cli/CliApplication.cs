@@ -1,5 +1,6 @@
 using GitKeyRouter.Core.Diagnostics;
 using GitKeyRouter.Core.Models;
+using GitKeyRouter.Core.Services;
 
 namespace GitKeyRouter.App.Cli;
 
@@ -31,7 +32,7 @@ public sealed partial class CliApplication
         }
 
         var command = NormalizeCommand(args);
-        return command is "apply" or "apply-profiles"
+        return command is "apply" or "apply-profiles" or "ssh-backend" or "trust-host"
             && args.Skip(1).Contains("--yes", StringComparer.OrdinalIgnoreCase);
     }
 
@@ -52,6 +53,8 @@ public sealed partial class CliApplication
             "test-service" => await TestServiceAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "test-route" => await TestRouteAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "test-ssh" => await TestSshAsync(args[1..], cancellationToken).ConfigureAwait(false),
+            "ssh-backend" => await SshBackendAsync(args[1..], cancellationToken).ConfigureAwait(false),
+            "trust-host" => await TrustHostAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh-login" => await GitHubLoginAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh-logout" => await GitHubLogoutAsync(args[1..], cancellationToken).ConfigureAwait(false),
             "gh-status" => await GitHubStatusAsync(args[1..], cancellationToken).ConfigureAwait(false),
@@ -251,10 +254,31 @@ public sealed partial class CliApplication
             return 3;
         }
 
+        var backend = await _services.GitSshBackendService.InspectAsync(cancellationToken).ConfigureAwait(false);
+        if (!backend.Success || backend.Value is null)
+        {
+            PrintErrors(backend);
+            return 2;
+        }
+
+        PrintSshBackend(backend.Value);
+        if (!backend.Value.IsOpenSsh)
+        {
+            Console.Error.WriteLine(
+                "Connection was not attempted because GitKeyRouter routing requires Git to use OpenSSH. " +
+                "Run 'ssh-backend --use-openssh' to preview the repair.");
+            return 2;
+        }
+
         var result = await _services.GitUrlRewriteService.TestRemoteRouteAsync(url, cancellationToken).ConfigureAwait(false);
         Console.WriteLine($"Connection: {result.Classification}");
         Console.WriteLine($"Password fallback: {result.PasswordFallbackDetected}");
         PrintProcess(result.Process);
+        if (SshHostTrustService.IsHostKeyVerificationFailure(result.Process))
+        {
+            Console.Error.WriteLine($"Preview the server fingerprints with: GitKeyRouter.exe trust-host {service.Id}");
+        }
+
         return result.AuthenticationSucceeded ? 0 : 2;
     }
 
@@ -344,6 +368,153 @@ public sealed partial class CliApplication
         return result.Value.Authenticated ? 0 : 2;
     }
 
+    private async Task<int> SshBackendAsync(string[] args, CancellationToken cancellationToken)
+    {
+        var inspectionResult = await _services.GitSshBackendService
+            .InspectAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (!inspectionResult.Success || inspectionResult.Value is null)
+        {
+            PrintErrors(inspectionResult);
+            return 2;
+        }
+
+        var inspection = inspectionResult.Value;
+        PrintSshBackend(inspection);
+        var fixRequested = args.Contains("--use-openssh", StringComparer.OrdinalIgnoreCase);
+        if (!fixRequested)
+        {
+            return inspection.IsOpenSsh ? 0 : 1;
+        }
+
+        if (inspection.IsOpenSsh)
+        {
+            Console.WriteLine("Git already uses OpenSSH; no setting was changed.");
+            return 0;
+        }
+
+        if (!args.Contains("--yes", StringComparer.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine("Preview only. Re-run with --use-openssh --yes to write the global Git settings.");
+            return inspection.IsOpenSsh ? 0 : 1;
+        }
+
+        var apply = await _services.GitSshBackendService
+            .UseOpenSshAsync(inspection, cancellationToken)
+            .ConfigureAwait(false);
+        if (!apply.Success || apply.Value is null)
+        {
+            PrintErrors(apply);
+            return 2;
+        }
+
+        Console.WriteLine("Git now uses OpenSSH.");
+        PrintSshBackend(apply.Value.After);
+        return 0;
+    }
+
+    private async Task<int> TrustHostAsync(string[] args, CancellationToken cancellationToken)
+    {
+        if (args.Length == 0)
+        {
+            Console.Error.WriteLine("Usage: GitKeyRouter.exe trust-host <id-or-host> [--yes]");
+            return 3;
+        }
+
+        var backend = await _services.GitSshBackendService.InspectAsync(cancellationToken).ConfigureAwait(false);
+        if (!backend.Success || backend.Value is null)
+        {
+            PrintErrors(backend);
+            return 2;
+        }
+
+        if (!backend.Value.IsOpenSsh)
+        {
+            PrintSshBackend(backend.Value);
+            Console.Error.WriteLine(
+                "Host trust was not changed because Git does not use OpenSSH. " +
+                "Run 'ssh-backend --use-openssh' first.");
+            return 2;
+        }
+
+        var config = await _services.ConfigStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var service = ResolveService(config, args[0]);
+        if (service is null)
+        {
+            Console.Error.WriteLine("The selected Git service was not found.");
+            return 3;
+        }
+
+        var previewResult = await _services.SshHostTrustService
+            .BuildPreviewAsync(service, cancellationToken)
+            .ConfigureAwait(false);
+        if (!previewResult.Success || previewResult.Value is null)
+        {
+            PrintErrors(previewResult);
+            return 2;
+        }
+
+        var preview = previewResult.Value;
+        Console.WriteLine($"Service:     {preview.ServiceDisplayName}");
+        Console.WriteLine($"Endpoint:    {preview.HostIdentifier}");
+        Console.WriteLine($"known_hosts: {preview.KnownHostsPath}");
+        Console.WriteLine($"Status:      {preview.Status}");
+        Console.WriteLine("Scanned server fingerprints:");
+        foreach (var key in preview.ScannedKeys)
+        {
+            Console.WriteLine($"  {key.KeyType}\t{key.Fingerprint}");
+        }
+
+        if (preview.Status == SshHostTrustStatus.Conflict)
+        {
+            Console.Error.WriteLine("Existing known_hosts entries conflict with the scan; no automatic change is allowed.");
+            return 2;
+        }
+
+        if (preview.Status == SshHostTrustStatus.Trusted)
+        {
+            Console.WriteLine("The scanned host keys are already trusted.");
+            return 0;
+        }
+
+        if (!args.Contains("--yes", StringComparer.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine(
+                "Preview only. Verify every SHA-256 fingerprint through a trusted channel, then re-run with --yes.");
+            return 1;
+        }
+
+        var apply = await _services.SshHostTrustService
+            .TrustAsync(service, preview, cancellationToken)
+            .ConfigureAwait(false);
+        if (!apply.Success || apply.Value is null)
+        {
+            PrintErrors(apply);
+            return 2;
+        }
+
+        Console.WriteLine($"Trusted {apply.Value.AddedKeyCount} host key(s).");
+        if (!string.IsNullOrWhiteSpace(apply.Value.BackupPath))
+        {
+            Console.WriteLine($"Backup: {apply.Value.BackupPath}");
+        }
+
+        return 0;
+    }
+
+    private static void PrintSshBackend(GitSshBackendInspection inspection)
+    {
+        Console.WriteLine($"Backend:          {inspection.DisplayName}");
+        Console.WriteLine($"Source:           {inspection.Source}");
+        Console.WriteLine($"Executable:       {inspection.EffectiveExecutable ?? "<Git default>"}");
+        Console.WriteLine($"Variant:          {inspection.EffectiveVariant ?? "<automatic>"}");
+        Console.WriteLine($"Detected OpenSSH: {inspection.SelectedOpenSshPath ?? "<not found>"}");
+        foreach (var blocker in inspection.EnvironmentBlockers)
+        {
+            Console.WriteLine($"Environment blocker: {blocker}");
+        }
+    }
+
     private static int PrintVersion()
     {
         Console.WriteLine(typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0");
@@ -365,6 +536,8 @@ public sealed partial class CliApplication
         Console.WriteLine("  test-service <id-or-host>");
         Console.WriteLine("  test-route <namespace> [--service <id-or-host>] [--url <repository-url>] [--connect]");
         Console.WriteLine("  test-ssh <host-alias-or-identity-id> [--verbose]");
+        Console.WriteLine("  ssh-backend [--use-openssh --yes]");
+        Console.WriteLine("  trust-host <id-or-host> [--yes]");
         Console.WriteLine("  gh-login <identity-id-or-host-alias>");
         Console.WriteLine("  gh-logout <identity-id-or-host-alias> --yes");
         Console.WriteLine("  gh-status [identity-id-or-host-alias] [--json]");

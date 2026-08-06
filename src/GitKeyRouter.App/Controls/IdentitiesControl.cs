@@ -553,6 +553,14 @@ public sealed class IdentitiesControl : UserControl, IAsyncRefreshable
 
         _status($"正在测试 SSH：{identity.HostAlias}");
         var result = await _services.SshKeyService.TestAsync(service, identity, verbose);
+        if (!result.Authenticated
+            && SshHostTrustService.IsHostKeyVerificationFailure(result.Process)
+            && await SshHostTrustUi.PromptAndTrustAsync(this, _services, service))
+        {
+            _status("主机密钥已信任，正在重新测试 SSH...");
+            result = await _services.SshKeyService.TestAsync(service, identity, verbose);
+        }
+
         var text = $"Classification: {result.Classification}\r\nAuthenticated: {result.Authenticated}\r\n\r\n{UiHelpers.FormatProcess(result.Process)}";
         using var form = new CommandResultForm("SSH 测试结果", text);
         form.ShowDialog(this);

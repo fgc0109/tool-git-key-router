@@ -68,6 +68,15 @@ public static class AppBootstrapper
             toolchainService,
             clock,
             gitProviderAdapters);
+        var sshHostTrustService = new SshHostTrustService(
+            fileSystem,
+            paths,
+            processRunner,
+            toolchainService,
+            clock);
+        var gitSshBackendService = new GitSshBackendService(
+            processRunner,
+            toolchainService);
         var sshKeyRenameService = new SshKeyRenameService(
             fileSystem,
             configStore,
@@ -83,7 +92,8 @@ public static class AppBootstrapper
             sshConfigService,
             gitUrlRewriteService,
             clock,
-            gitProviderAdapters);
+            gitProviderAdapters,
+            gitSshBackendService);
 
         return new ApplicationServices
         {
@@ -100,6 +110,8 @@ public static class AppBootstrapper
             IdentityService = identityService,
             OwnerRouteService = ownerRouteService,
             SshKeyService = sshKeyService,
+            SshHostTrustService = sshHostTrustService,
+            GitSshBackendService = gitSshBackendService,
             SshKeyRenameService = sshKeyRenameService,
             SshConfigService = sshConfigService,
             GitUrlRewriteService = gitUrlRewriteService,

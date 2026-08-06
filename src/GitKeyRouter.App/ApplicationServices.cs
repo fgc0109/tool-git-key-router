@@ -32,6 +32,10 @@ public sealed class ApplicationServices
 
     public required SshKeyService SshKeyService { get; init; }
 
+    public required SshHostTrustService SshHostTrustService { get; init; }
+
+    public required GitSshBackendService GitSshBackendService { get; init; }
+
     public required SshKeyRenameService SshKeyRenameService { get; init; }
 
     public required SshConfigService SshConfigService { get; init; }

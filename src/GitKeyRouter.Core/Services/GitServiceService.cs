@@ -150,8 +150,8 @@ public sealed class GitServiceService
                     ? "SSH endpoint reached; key authentication was rejected"
                     : output.Contains("Could not resolve hostname", StringComparison.OrdinalIgnoreCase)
                         ? "DNS resolution failed"
-                        : output.Contains("Host key verification failed", StringComparison.OrdinalIgnoreCase)
-                            ? "Host key verification failed"
+                        : SshHostTrustService.IsHostKeyVerificationFailure(process)
+                            ? "SSH server host key is not trusted or conflicts with known_hosts"
                             : "SSH connection did not confirm authentication";
 
         var result = new GitServiceConnectionResult

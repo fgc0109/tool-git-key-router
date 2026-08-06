@@ -781,6 +781,8 @@ public sealed class GitUrlRewriteService
         var authenticated = !passwordFallback && (process.Succeeded || providerAuthenticated || traceAuthenticated);
         var classification = passwordFallback
             ? "SSH authentication fell back to a password prompt."
+            : SshHostTrustService.IsHostKeyVerificationFailure(process)
+                ? "SSH server host key is not trusted or conflicts with known_hosts."
             : authenticated && process.Succeeded
                 ? "Git remote access and SSH key authentication succeeded."
                 : authenticated
