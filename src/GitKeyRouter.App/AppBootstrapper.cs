@@ -7,6 +7,7 @@ using GitKeyRouter.Infrastructure.Git;
 using GitKeyRouter.Infrastructure.GitHub;
 using GitKeyRouter.Infrastructure.Logging;
 using GitKeyRouter.Infrastructure.ProcessExecution;
+using GitKeyRouter.App.Updates;
 
 namespace GitKeyRouter.App;
 
@@ -26,6 +27,10 @@ public static class AppBootstrapper
         IBackupService backupService = new BackupService(paths, fileSystem, gitStore, clock);
         IAppConfigStore configStore = new JsonAppConfigStore(paths, fileSystem);
         ISafeLogger logger = new SafeFileLogger(paths);
+        var updateRoot = Path.Combine(paths.AppDataDirectory, "updates");
+        var updateChecker = new GitHubUpdateChecker();
+        var updateDownloadService = new UpdateDownloadService(updateRoot);
+        var updateInstallerLauncher = new UpdateInstallerLauncher(updateRoot);
         var gitProviderAdapters = GitProviderAdapterRegistry.CreateDefault();
 
         var sshConfigService = new SshConfigService(fileSystem, paths, backupService, gitProviderAdapters);
@@ -117,6 +122,9 @@ public static class AppBootstrapper
             GitUrlRewriteService = gitUrlRewriteService,
             GitHubCliService = gitHubCliService,
             DiagnosticService = diagnosticService,
+            UpdateChecker = updateChecker,
+            UpdateDownloadService = updateDownloadService,
+            UpdateInstallerLauncher = updateInstallerLauncher,
             Logger = logger
         };
     }

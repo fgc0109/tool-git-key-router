@@ -20,5 +20,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\GitKeyRouter.App\GitKeyRouter.App.csproj" />
+    <ProjectReference Include="..\..\src\GitKeyRouter.Updater\GitKeyRouter.Updater.csproj" />
   </ItemGroup>
 </Project>

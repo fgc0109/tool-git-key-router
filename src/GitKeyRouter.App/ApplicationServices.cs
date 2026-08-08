@@ -1,6 +1,7 @@
 using GitKeyRouter.Core.Abstractions;
 using GitKeyRouter.Core.Services;
 using GitKeyRouter.Infrastructure.GitHub;
+using GitKeyRouter.App.Updates;
 
 namespace GitKeyRouter.App;
 
@@ -45,6 +46,12 @@ public sealed class ApplicationServices
     public required GitHubCliService GitHubCliService { get; init; }
 
     public required DiagnosticService DiagnosticService { get; init; }
+
+    public required GitHubUpdateChecker UpdateChecker { get; init; }
+
+    public required UpdateDownloadService UpdateDownloadService { get; init; }
+
+    public required UpdateInstallerLauncher UpdateInstallerLauncher { get; init; }
 
     public required ISafeLogger Logger { get; init; }
 }

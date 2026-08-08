@@ -104,6 +104,11 @@ public sealed class PublishSmokeTests
         Assert.Contains("INSTALLERFLAVOR", installerSource, StringComparison.Ordinal);
         Assert.DoesNotContain("LicenseAgreementDlg", installerSource, StringComparison.Ordinal);
         Assert.Contains("-p:PublishSingleFile=false", buildScript, StringComparison.Ordinal);
+        Assert.Contains("NuGetLockFilePath=packages.publish-win-x64.lock.json", buildScript, StringComparison.Ordinal);
+        Assert.Contains("-p:PublishSingleFile=true", buildScript, StringComparison.Ordinal);
+        Assert.Contains("GitKeyRouter.Updater\\GitKeyRouter.Updater.csproj", buildScript, StringComparison.Ordinal);
+        Assert.Contains("GitKeyRouter.Updater.exe", buildScript, StringComparison.Ordinal);
+        Assert.Contains("GitKeyRouter.Updater.exe", validationScript, StringComparison.Ordinal);
         Assert.Contains("Test-WinX64Installer.ps1", buildScript, StringComparison.Ordinal);
         Assert.Contains("WindowsInstaller.Installer", validationScript, StringComparison.Ordinal);
         Assert.Contains("msiexec.exe", lifecycleScript, StringComparison.OrdinalIgnoreCase);
@@ -123,6 +128,8 @@ public sealed class PublishSmokeTests
             "Build-WinX64Installers.ps1",
             "Test-WinX64Installer.ps1",
             "Test-InstallerLifecycle.ps1"
+,
+            "Write-UpdateManifest.ps1"
         };
 
         foreach (var scriptName in scriptNames)
@@ -149,6 +156,76 @@ public sealed class PublishSmokeTests
             Assert.True(
                 result.ExitCode == 0,
                 $"{scriptName} has invalid syntax.{Environment.NewLine}{result.StandardOutput}{Environment.NewLine}{result.StandardError}");
+        }
+    }
+
+    [Fact]
+    public async Task PagesWorkflow_GeneratesSchema3UpdateManifestFromReleaseFixture()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var workflow = await File.ReadAllTextAsync(Path.Combine(repositoryRoot, ".github", "workflows", "pages.yml"));
+        Assert.Contains("workflow_run:", workflow, StringComparison.Ordinal);
+        Assert.Contains("Write-UpdateManifest.ps1", workflow, StringComparison.Ordinal);
+        Assert.Contains("site/update.json", workflow, StringComparison.Ordinal);
+
+        var temporaryRoot = Path.Combine(Path.GetTempPath(), "GitKeyRouter.UpdateManifestTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temporaryRoot);
+        try
+        {
+            const string version = "1.2.3";
+            const string tag = "v1.2.3";
+            var expectedFiles = new[]
+            {
+                $"GitKeyRouter-v{version}-win-x64-framework-dependent.zip",
+                $"GitKeyRouter-v{version}-win-x64-portable.zip",
+                $"GitKeyRouter-v{version}-win-x64-framework-dependent-setup.msi",
+                $"GitKeyRouter-v{version}-win-x64-setup.msi",
+                "SHA256SUMS.txt"
+            };
+            var assets = expectedFiles.Select(name => new
+            {
+                name,
+                browser_download_url = $"https://github.com/project-base-mirror/tool-git-key-router/releases/download/{tag}/{name}"
+            }).ToArray();
+            var fixturePath = Path.Combine(temporaryRoot, "release.json");
+            var outputPath = Path.Combine(temporaryRoot, "update.json");
+            await File.WriteAllTextAsync(
+                fixturePath,
+                JsonSerializer.Serialize(new
+                {
+                    tag_name = tag,
+                    html_url = $"https://github.com/project-base-mirror/tool-git-key-router/releases/tag/{tag}",
+                    draft = false,
+                    prerelease = false,
+                    body = "release notes",
+                    assets
+                }));
+
+            var result = await RunProcessAsync(
+                "powershell.exe",
+                [
+                    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                    "-File", Path.Combine(repositoryRoot, "scripts", "Write-UpdateManifest.ps1"),
+                    "-OutputPath", outputPath,
+                    "-ReleaseJsonPath", fixturePath
+                ],
+                repositoryRoot,
+                TimeSpan.FromSeconds(30),
+                captureOutput: true);
+            Assert.True(result.ExitCode == 0, $"Update manifest generation failed.{Environment.NewLine}{result.StandardOutput}{Environment.NewLine}{result.StandardError}");
+
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath));
+            var root = document.RootElement;
+            Assert.Equal(3, root.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(tag, root.GetProperty("tagName").GetString());
+            Assert.Equal(version, root.GetProperty("version").GetString());
+            Assert.Equal("release notes", root.GetProperty("notes").GetString());
+            Assert.EndsWith(expectedFiles[1], root.GetProperty("downloads").GetProperty("portableSelfContained").GetString(), StringComparison.Ordinal);
+            Assert.EndsWith("SHA256SUMS.txt", root.GetProperty("checksumsUrl").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(temporaryRoot, recursive: true);
         }
     }
 
@@ -553,6 +630,7 @@ public sealed class PublishSmokeTests
                 Assert.Contains("GitKeyRouter.exe", entryNames);
                 Assert.Contains("LICENSE.txt", entryNames);
                 Assert.Contains("README.txt", entryNames);
+                Assert.DoesNotContain("GitKeyRouter.Updater.exe", entryNames);
             }
 
             var checksumLines = await File.ReadAllLinesAsync(checksumPath);

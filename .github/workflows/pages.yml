@@ -8,6 +8,11 @@ on:
       - '.github/workflows/pages.yml'
       - 'site/**'
   workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Release
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -21,17 +26,25 @@ concurrency:
 jobs:
   build:
     name: Build static site
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Generate update manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/Write-UpdateManifest.ps1 -OutputPath site/update.json
+
       - name: Validate static site
         shell: bash
         run: |
           test -f site/index.html
           test -f site/styles.css
+          test -f site/update.json
           if find site -type l -print -quit | grep -q .; then
             echo 'The Pages artifact must not contain symbolic links.' >&2
             exit 1

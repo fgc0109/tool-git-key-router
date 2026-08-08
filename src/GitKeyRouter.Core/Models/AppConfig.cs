@@ -12,6 +12,8 @@ public sealed class AppConfig
 
     public string UiLanguage { get; set; } = "zh-CN";
 
+    public bool CheckForUpdatesOnStartup { get; set; } = true;
+
     public List<GitServiceInstance> GitServices { get; set; } = [GitServiceInstance.CreateGitHubCom()];
 
     public List<GitIdentity> Identities { get; set; } = [];

@@ -323,6 +323,12 @@ public sealed class WinFormsSmokeTests
                     Descendants<ComboBox>(main),
                     item => item.Name == "UiLanguageSelector");
                 Assert.Equal(2, selector.Items.Count);
+                Assert.Single(
+                    Descendants<CheckBox>(main),
+                    item => item.Name == "CheckForUpdatesOnStartupCheckbox" && item.Checked);
+                Assert.Single(
+                    Descendants<Button>(main),
+                    button => button.Name == "CheckForUpdatesButton");
                 Assert.Contains("     Git Services", Descendants<Button>(main).Select(button => button.Text));
             }
             finally

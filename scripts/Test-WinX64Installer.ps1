@@ -100,6 +100,10 @@ if (@($fileNames | Where-Object { $_ -match '(?i)GitKeyRouter\.dll$' }).Count -e
 if (@($fileNames | Where-Object { $_ -match '(?i)GitKeyRouter\.runtimeconfig\.json$' }).Count -eq 0) {
     throw 'Installer payload does not contain GitKeyRouter.runtimeconfig.json.'
 }
+$updaterFiles = @($fileNames | Where-Object { $_ -match '(?i)GitKeyRouter\.Updater\.exe$' })
+if ($updaterFiles.Count -ne 1) {
+    throw "Installer payload must contain exactly one GitKeyRouter.Updater.exe, found $($updaterFiles.Count)."
+}
 
 $runtimeFiles = @($fileNames | Where-Object { $_ -match '(?i)coreclr\.dll$' })
 if ($ExpectedFlavor -ceq 'self-contained' -and $runtimeFiles.Count -eq 0) {

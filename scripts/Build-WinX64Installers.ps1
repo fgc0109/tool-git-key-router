@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $appProject = Join-Path $root 'src\GitKeyRouter.App\GitKeyRouter.App.csproj'
+$updaterProject = Join-Path $root 'src\GitKeyRouter.Updater\GitKeyRouter.Updater.csproj'
 $installerProject = Join-Path $root 'installer\GitKeyRouter.Installer.wixproj'
 $validationScript = Join-Path $PSScriptRoot 'Test-WinX64Installer.ps1'
 
@@ -25,6 +26,7 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 
 $selfContainedPayload = Join-Path $PayloadRoot 'win-x64-self-contained'
 $frameworkPayload = Join-Path $PayloadRoot 'win-x64-framework-dependent'
+$updaterPayload = Join-Path $PayloadRoot 'updater'
 $selfContainedIntermediate = Join-Path $root 'installer\obj\release-self-contained\'
 $frameworkIntermediate = Join-Path $root 'installer\obj\release-framework-dependent\'
 $selfContainedName = "GitKeyRouter-v$Version-win-x64-setup.msi"
@@ -88,8 +90,41 @@ if (Test-Path -LiteralPath $OutputDirectory) {
 New-Item -ItemType Directory -Path $PayloadRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
+Invoke-DotNet -Arguments @(
+    'restore',
+    $appProject,
+    '-r', 'win-x64',
+    '--locked-mode',
+    '-p:NuGetLockFilePath=packages.publish-win-x64.lock.json',
+    '-p:PublishSingleFile=true'
+)
+
 Publish-InstallerPayload -Destination $selfContainedPayload -SelfContained $true
 Publish-InstallerPayload -Destination $frameworkPayload -SelfContained $false
+
+Invoke-DotNet -Arguments @('restore', $updaterProject, '-r', 'win-x64')
+Invoke-DotNet -Arguments @(
+    'publish',
+    $updaterProject,
+    '-c', 'Release',
+    '-r', 'win-x64',
+    '--self-contained=true',
+    '--no-restore',
+    '-p:PublishSingleFile=true',
+    '-p:IncludeNativeLibrariesForSelfExtract=true',
+    '-p:EnableCompressionInSingleFile=true',
+    '-p:PublishTrimmed=false',
+    '-p:PublishReadyToRun=false',
+    '-p:DebugType=None',
+    '-p:DebugSymbols=false',
+    '-o', $updaterPayload
+)
+$updaterExecutable = Join-Path $updaterPayload 'GitKeyRouter.Updater.exe'
+if (-not (Test-Path -LiteralPath $updaterExecutable -PathType Leaf)) {
+    throw "Updater publish did not produce GitKeyRouter.Updater.exe: $updaterPayload"
+}
+Copy-Item -LiteralPath $updaterExecutable -Destination (Join-Path $selfContainedPayload 'GitKeyRouter.Updater.exe') -Force
+Copy-Item -LiteralPath $updaterExecutable -Destination (Join-Path $frameworkPayload 'GitKeyRouter.Updater.exe') -Force
 
 Invoke-DotNet -Arguments @('restore', $installerProject, '--locked-mode')
 

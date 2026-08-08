@@ -160,8 +160,8 @@
       "GitKeyRouter": {
         "type": "Project",
         "dependencies": {
-          "GitKeyRouter.Core": "[0.4.15, )",
-          "GitKeyRouter.Infrastructure": "[0.4.15, )"
+          "GitKeyRouter.Core": "[0.4.22, )",
+          "GitKeyRouter.Infrastructure": "[0.4.22, )"
         }
       },
       "gitkeyrouter.core": {
@@ -170,8 +170,11 @@
       "gitkeyrouter.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "GitKeyRouter.Core": "[0.4.15, )"
+          "GitKeyRouter.Core": "[0.4.22, )"
         }
+      },
+      "gitkeyrouter.updater": {
+        "type": "Project"
       }
     },
     "net10.0-windows7.0/win-x64": {
