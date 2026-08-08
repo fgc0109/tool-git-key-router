@@ -28,7 +28,7 @@ Process execution tests launch the repository-owned `GitKeyRouter.ProcessTestChi
 
 Both test projects use the xUnit v3 executable test-project model (`OutputType=Exe`) and the xUnit VSTest adapter, preserving the existing `dotnet test` and TRX workflow. Package versions are declared once in the root `Directory.Packages.props`; individual project files contain version-free `PackageReference` entries, and checked-in lock files pin the resolved graph for normal and `win-x64` restores.
 
-xUnit v3 analyzer rule `xUnit1051` is temporarily suppressed in both test projects because existing operation-specific cancellation and timeout tests intentionally use dedicated tokens. The suppression is explicit technical debt for the replanned v0.4.23 analyzer cleanup; all other compiler and analyzer warnings remain errors when `CI=true`.
+xUnit v3 analyzer rule `xUnit1051` is temporarily suppressed in both test projects because existing operation-specific cancellation and timeout tests intentionally use dedicated tokens. The suppression is explicit technical debt for the replanned v0.4.25 analyzer cleanup; all other compiler and analyzer warnings remain errors when `CI=true`.
 
 ## GitHub CLI identity boundary
 

@@ -163,7 +163,7 @@
       "gitkeyrouter.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "GitKeyRouter.Core": "[0.4.15, )"
+          "GitKeyRouter.Core": "[0.4.23, )"
         }
       }
     }
