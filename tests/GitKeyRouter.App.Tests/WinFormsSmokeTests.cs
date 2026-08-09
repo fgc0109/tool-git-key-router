@@ -327,6 +327,9 @@ public sealed class WinFormsSmokeTests
                     Descendants<CheckBox>(main),
                     item => item.Name == "CheckForUpdatesOnStartupCheckbox" && item.Checked);
                 Assert.Single(
+                    Descendants<CheckBox>(main),
+                    item => item.Name == "KeepRunningInTrayCheckbox" && item.Checked);
+                Assert.Single(
                     Descendants<Button>(main),
                     button => button.Name == "CheckForUpdatesButton");
                 Assert.Contains("     Git Services", Descendants<Button>(main).Select(button => button.Text));
@@ -445,6 +448,21 @@ public sealed class WinFormsSmokeTests
         first.Dispose();
         using var third = SingleInstanceGuard.TryAcquire(mutexName);
         Assert.True(third.IsPrimaryInstance);
+    }
+
+    [Fact]
+    public void SingleInstanceGuard_SecondarySignalsPrimaryActivation()
+    {
+        var mutexName = $@"Local\GitKeyRouter.Tests.{Guid.NewGuid():N}";
+        using var activated = new ManualResetEventSlim();
+        using var first = SingleInstanceGuard.TryAcquire(mutexName);
+        first.StartListening(() => activated.Set());
+
+        using var second = SingleInstanceGuard.TryAcquire(mutexName);
+
+        Assert.True(first.IsPrimaryInstance);
+        Assert.False(second.IsPrimaryInstance);
+        Assert.True(activated.Wait(TimeSpan.FromSeconds(2)));
     }
 
     private static void Exercise(Control control, params Size[] sizes)

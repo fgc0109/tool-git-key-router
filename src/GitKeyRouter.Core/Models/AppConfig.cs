@@ -14,6 +14,8 @@ public sealed class AppConfig
 
     public bool CheckForUpdatesOnStartup { get; set; } = true;
 
+    public bool KeepRunningInTray { get; set; } = true;
+
     public List<GitServiceInstance> GitServices { get; set; } = [GitServiceInstance.CreateGitHubCom()];
 
     public List<GitIdentity> Identities { get; set; } = [];

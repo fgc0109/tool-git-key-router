@@ -16,11 +16,11 @@ internal static class Program
         }
 
         using var instanceGuard = CliApplication.RequiresExclusiveInstance(args)
-            ? SingleInstanceGuard.TryAcquire()
+            ? SingleInstanceGuard.TryAcquire(signalExistingInstance: args.Length == 0)
             : null;
         if (instanceGuard is { IsPrimaryInstance: false })
         {
-            return ReportExistingInstance(args.Length > 0);
+            return args.Length == 0 ? 0 : ReportExistingInstance(isCli: true);
         }
 
         ApplicationServices? services = null;
@@ -55,7 +55,33 @@ internal static class Program
                 services.Logger.Error("Unhandled UI thread error.", eventArgs.Exception);
                 MessageBox.Show(eventArgs.Exception.ToString(), "GitKeyRouter - 未处理错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             };
-            Application.Run(new MainForm(services));
+            using var mainForm = new MainForm(services);
+            if (instanceGuard is { IsPrimaryInstance: true })
+            {
+                _ = mainForm.Handle;
+                instanceGuard.StartListening(() =>
+                {
+                    if (mainForm.IsDisposed || mainForm.Disposing || !mainForm.IsHandleCreated)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        mainForm.BeginInvoke(new Action(mainForm.ActivateFromSecondaryInstance));
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // The application is already closing.
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // The window handle can disappear while shutdown is in progress.
+                    }
+                });
+            }
+
+            Application.Run(mainForm);
             return 0;
         }
         catch (Exception exception)

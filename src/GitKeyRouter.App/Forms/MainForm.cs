@@ -33,10 +33,19 @@ public sealed class MainForm : Form
     private ComboBox? _languageSelector;
     private CheckBox? _checkForUpdatesOnStartupCheckbox;
     private Button? _checkForUpdatesButton;
+    private CheckBox? _keepRunningInTrayCheckbox;
+    private NotifyIcon? _trayIcon;
+    private ContextMenuStrip? _trayMenu;
+    private ToolStripMenuItem? _trayOpenMenuItem;
+    private ToolStripMenuItem? _trayExitMenuItem;
+    private Icon? _trayIconImage;
     private string _activePageKey = PageKeys.Overview;
     private bool _updatingLanguage;
     private bool _updatingUpdatePreference;
     private bool _checkingForUpdates;
+    private bool _updatingTrayPreference;
+    private bool _exitRequested;
+    private bool _closing;
     private static string DisplayVersion => typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "Unknown";
 
     public MainForm(ApplicationServices services)
@@ -85,9 +94,14 @@ public sealed class MainForm : Form
         Controls.Add(divider);
         Controls.Add(sidebar);
         Controls.Add(statusStrip);
+        BuildTrayIcon();
+        FormClosing += MainForm_FormClosing;
+        Resize += MainForm_Resize;
         Shown += async (_, _) =>
         {
             await ShowPageAsync(PageKeys.Overview);
+            await InitializeTrayPreferenceAsync();
+            ApplyTraySettings();
             await InitializeUpdatePreferenceAsync();
             ShowPreviousUpdateResult();
             var toolsReady = await RequiredToolInstallationUi.CheckAndOfferAsync(
@@ -211,15 +225,16 @@ public sealed class MainForm : Form
         var footer = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            Height = 176,
+            Height = 204,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 6,
             Padding = new Padding(18, 6, 18, 12),
             BackColor = UiHelpers.SidebarBackground
         };
         footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
         footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         var footerHint = new Label
@@ -261,6 +276,25 @@ public sealed class MainForm : Form
                 await ChangeLanguageAsync(choice.Language);
             }
         };
+        var keepRunningInTray = new CheckBox
+        {
+            Name = "KeepRunningInTrayCheckbox",
+            Text = AppLocalization.T("关闭或最小化主窗口时驻留系统托盘", "Keep running in tray when the window is closed or minimized"),
+            Dock = DockStyle.Fill,
+            ForeColor = UiHelpers.SidebarMuted,
+            Font = new Font("Segoe UI", 8F),
+            Checked = true,
+            AutoSize = false
+        };
+        _keepRunningInTrayCheckbox = keepRunningInTray;
+        keepRunningInTray.CheckedChanged += async (_, _) =>
+        {
+            if (!_updatingTrayPreference)
+            {
+                await PersistTrayPreferenceAsync(keepRunningInTray.Checked);
+            }
+        };
+
         var checkForUpdatesOnStartup = new CheckBox
         {
             Name = "CheckForUpdatesOnStartupCheckbox",
@@ -297,8 +331,9 @@ public sealed class MainForm : Form
         footer.Controls.Add(footerHint, 0, 0);
         footer.Controls.Add(languageLabel, 0, 1);
         footer.Controls.Add(languageSelector, 0, 2);
-        footer.Controls.Add(checkForUpdatesOnStartup, 0, 3);
-        footer.Controls.Add(checkForUpdatesButton, 0, 4);
+        footer.Controls.Add(keepRunningInTray, 0, 3);
+        footer.Controls.Add(checkForUpdatesOnStartup, 0, 4);
+        footer.Controls.Add(checkForUpdatesButton, 0, 5);
 
         sidebar.Controls.Add(navigation);
         sidebar.Controls.Add(footer);
@@ -438,6 +473,21 @@ public sealed class MainForm : Form
             _languageLabel.Text = AppLocalization.T("界面语言", "Interface language");
         }
 
+        if (_keepRunningInTrayCheckbox is not null)
+        {
+            _keepRunningInTrayCheckbox.Text = AppLocalization.T("关闭或最小化主窗口时驻留系统托盘", "Keep running in tray when the window is closed or minimized");
+        }
+
+        if (_trayOpenMenuItem is not null)
+        {
+            _trayOpenMenuItem.Text = AppLocalization.T("打开 GitKeyRouter", "Open GitKeyRouter");
+        }
+
+        if (_trayExitMenuItem is not null)
+        {
+            _trayExitMenuItem.Text = AppLocalization.T("退出", "Exit");
+        }
+
         if (_checkForUpdatesOnStartupCheckbox is not null)
         {
             _checkForUpdatesOnStartupCheckbox.Text = AppLocalization.T("启动时检查更新", "Check for updates on startup");
@@ -466,6 +516,177 @@ public sealed class MainForm : Form
                 _updatingLanguage = false;
             }
         }
+    }
+
+    private bool KeepRunningInTray => _keepRunningInTrayCheckbox?.Checked == true;
+
+    private void BuildTrayIcon()
+    {
+        _trayOpenMenuItem = new ToolStripMenuItem(AppLocalization.T("打开 GitKeyRouter", "Open GitKeyRouter"));
+        _trayOpenMenuItem.Click += (_, _) => ShowMainWindow();
+        _trayExitMenuItem = new ToolStripMenuItem(AppLocalization.T("退出", "Exit"));
+        _trayExitMenuItem.Click += (_, _) => RequestExit();
+
+        _trayMenu = new ContextMenuStrip();
+        _trayMenu.Items.Add(_trayOpenMenuItem);
+        _trayMenu.Items.Add(new ToolStripSeparator());
+        _trayMenu.Items.Add(_trayExitMenuItem);
+
+        _trayIconImage = AppIcon.LoadWindowIcon();
+        _trayIcon = new NotifyIcon
+        {
+            Icon = _trayIconImage,
+            Text = "GitKeyRouter",
+            ContextMenuStrip = _trayMenu,
+            Visible = false
+        };
+        _trayIcon.DoubleClick += (_, _) => ShowMainWindow();
+    }
+
+    private async Task InitializeTrayPreferenceAsync()
+    {
+        if (_keepRunningInTrayCheckbox is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var snapshot = await _services.ConfigStore.LoadSnapshotAsync();
+            _updatingTrayPreference = true;
+            _keepRunningInTrayCheckbox.Checked = snapshot.Config.KeepRunningInTray;
+        }
+        catch (Exception exception)
+        {
+            _services.Logger.Error("Failed to load tray-residence preference.", exception);
+            SetStatus(AppLocalization.T("无法读取托盘驻留偏好", "Could not load the tray-residence preference"));
+        }
+        finally
+        {
+            _updatingTrayPreference = false;
+        }
+    }
+
+    private async Task PersistTrayPreferenceAsync(bool enabled)
+    {
+        try
+        {
+            var snapshot = await _services.ConfigStore.LoadSnapshotAsync();
+            var config = snapshot.Config;
+            config.KeepRunningInTray = enabled;
+            await _services.ConfigStore.SaveIfUnchangedAsync(config, snapshot.Version);
+            ApplyTraySettings();
+            SetStatus(enabled
+                ? AppLocalization.T("已启用系统托盘驻留", "System tray residence enabled")
+                : AppLocalization.T("已关闭系统托盘驻留", "System tray residence disabled"));
+        }
+        catch (Exception exception)
+        {
+            _services.Logger.Error("Failed to persist tray-residence preference.", exception);
+            SetStatus(AppLocalization.T("托盘驻留偏好保存失败", "Could not save the tray-residence preference"));
+        }
+    }
+
+    private void ApplyTraySettings()
+    {
+        if (_trayIcon is not null)
+        {
+            _trayIcon.Visible = KeepRunningInTray && !_closing;
+        }
+    }
+
+    private void MainForm_Resize(object? sender, EventArgs eventArgs)
+    {
+        if (WindowState != FormWindowState.Minimized
+            || !TrayResidencePolicy.ShouldHideOnMinimize(KeepRunningInTray, _closing)
+            || !IsHandleCreated)
+        {
+            return;
+        }
+
+        BeginInvoke(new Action(() =>
+        {
+            if (!IsDisposed && !Disposing && WindowState == FormWindowState.Minimized)
+            {
+                HideToTray();
+            }
+        }));
+    }
+
+    private void MainForm_FormClosing(object? sender, FormClosingEventArgs eventArgs)
+    {
+        if (TrayResidencePolicy.ShouldHideOnClose(KeepRunningInTray, _exitRequested, eventArgs.CloseReason))
+        {
+            eventArgs.Cancel = true;
+            HideToTray();
+            return;
+        }
+
+        _closing = true;
+        if (_trayIcon is not null)
+        {
+            _trayIcon.Visible = false;
+        }
+    }
+
+    private void HideToTray()
+    {
+        if (!KeepRunningInTray || _closing)
+        {
+            return;
+        }
+
+        if (_trayIcon is not null)
+        {
+            _trayIcon.Visible = true;
+        }
+
+        Hide();
+    }
+
+    private void ShowMainWindow()
+    {
+        if (_closing || IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        if (!Visible)
+        {
+            Show();
+        }
+
+        if (WindowState == FormWindowState.Minimized)
+        {
+            WindowState = FormWindowState.Normal;
+        }
+
+        Activate();
+        BringToFront();
+    }
+
+    internal void ActivateFromSecondaryInstance() => ShowMainWindow();
+
+    internal void RequestExit()
+    {
+        _exitRequested = true;
+        ShowMainWindow();
+        Close();
+    }
+
+    private void DisposeTrayResources()
+    {
+        if (_trayIcon is not null)
+        {
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+            _trayIcon = null;
+        }
+
+        _trayMenu?.Dispose();
+        _trayMenu = null;
+        _trayIconImage?.Dispose();
+        _trayIconImage = null;
     }
 
     private async Task InitializeUpdatePreferenceAsync()
@@ -608,7 +829,7 @@ public sealed class MainForm : Form
             }
 
             SetStatus(AppLocalization.T("安装程序已就绪，正在退出以完成更新…", "Installer ready; closing GitKeyRouter to finish the update…"));
-            Close();
+            RequestExit();
             return;
         }
 
@@ -755,6 +976,7 @@ public sealed class MainForm : Form
     {
         if (disposing)
         {
+            DisposeTrayResources();
             foreach (var page in _pages.Values.Distinct())
             {
                 page.Dispose();
