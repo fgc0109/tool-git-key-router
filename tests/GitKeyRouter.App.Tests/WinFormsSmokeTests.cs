@@ -1,8 +1,10 @@
 using System.Runtime.ExceptionServices;
+using System.Reflection;
 using GitKeyRouter.App;
 using GitKeyRouter.App.Controls;
 using GitKeyRouter.App.Forms;
 using GitKeyRouter.App.Presentation;
+using GitKeyRouter.App.Updates;
 using GitKeyRouter.Core.Models;
 
 namespace GitKeyRouter.App.Tests;
@@ -332,6 +334,11 @@ public sealed class WinFormsSmokeTests
                 Assert.Single(
                     Descendants<Button>(main),
                     button => button.Name == "CheckForUpdatesButton");
+                var trayMenuField = typeof(MainForm).GetField("_trayMenu", BindingFlags.Instance | BindingFlags.NonPublic);
+                var trayMenu = Assert.IsType<ContextMenuStrip>(trayMenuField?.GetValue(main));
+                Assert.Contains(
+                    trayMenu.Items.OfType<ToolStripMenuItem>(),
+                    item => item.Name == "TrayCheckUpdatesMenuItem");
                 Assert.Contains("     Git Services", Descendants<Button>(main).Select(button => button.Text));
             }
             finally
@@ -342,6 +349,58 @@ public sealed class WinFormsSmokeTests
                 }
 
                 AppLocalization.SetLanguage(AppLanguage.SimplifiedChinese);
+            }
+        });
+
+    [Fact]
+    public void UpdateDialog_OffersInstallerAndPortableActions()
+        => StaTest.Run(() =>
+        {
+            var previousLanguage = AppLocalization.CurrentLanguage;
+            AppLocalization.SetLanguage(AppLanguage.SimplifiedChinese);
+            try
+            {
+                var release = new UpdateReleaseInfo(
+                    "v9.8.7",
+                    new Version(9, 8, 7, 0),
+                    new Uri("https://github.com/project-base-mirror/tool-git-key-router/releases/tag/v9.8.7"),
+                    new Uri("https://github.com/project-base-mirror/tool-git-key-router/releases/download/v9.8.7/GitKeyRouter-v9.8.7-win-x64-framework-dependent.zip"),
+                    new Uri("https://github.com/project-base-mirror/tool-git-key-router/releases/download/v9.8.7/GitKeyRouter-v9.8.7-win-x64-portable.zip"),
+                    new Uri("https://github.com/project-base-mirror/tool-git-key-router/releases/download/v9.8.7/GitKeyRouter-v9.8.7-win-x64-framework-dependent-setup.msi"),
+                    new Uri("https://github.com/project-base-mirror/tool-git-key-router/releases/download/v9.8.7/GitKeyRouter-v9.8.7-win-x64-setup.msi"),
+                    new Uri("https://github.com/project-base-mirror/tool-git-key-router/releases/download/v9.8.7/SHA256SUMS.txt"),
+                    "release notes",
+                    UpdateReleaseSource.PagesManifest);
+
+                using var installer = new UpdateDialog(
+                    new Version(9, 8, 6, 0),
+                    release,
+                    UpdatePackageKind.InstallerSelfContained,
+                    allowVerifiedInstaller: true);
+                _ = installer.Handle;
+                var installerPrimary = Assert.Single(
+                    Descendants<Button>(installer),
+                    button => button.Name == "UpdatePrimaryActionButton");
+                Assert.Equal("下载并安装", installerPrimary.Text);
+                Assert.Same(installerPrimary, installer.AcceptButton);
+                Assert.Single(Descendants<Button>(installer), button => button.Name == "UpdateReleaseButton");
+                Assert.Single(Descendants<Button>(installer), button => button.Name == "UpdateLaterButton");
+
+                using var portable = new UpdateDialog(
+                    new Version(9, 8, 6, 0),
+                    release,
+                    UpdatePackageKind.PortableSelfContained,
+                    allowVerifiedInstaller: false);
+                _ = portable.Handle;
+                var portablePrimary = Assert.Single(
+                    Descendants<Button>(portable),
+                    button => button.Name == "UpdatePrimaryActionButton");
+                Assert.Equal("打开匹配下载", portablePrimary.Text);
+                Assert.Contains("便携版", portablePrimary.AccessibleDescription, StringComparison.Ordinal);
+            }
+            finally
+            {
+                AppLocalization.SetLanguage(previousLanguage);
             }
         });
 

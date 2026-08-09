@@ -37,6 +37,7 @@ public sealed class MainForm : Form
     private NotifyIcon? _trayIcon;
     private ContextMenuStrip? _trayMenu;
     private ToolStripMenuItem? _trayOpenMenuItem;
+    private ToolStripMenuItem? _trayCheckUpdatesMenuItem;
     private ToolStripMenuItem? _trayExitMenuItem;
     private Icon? _trayIconImage;
     private string _activePageKey = PageKeys.Overview;
@@ -483,6 +484,11 @@ public sealed class MainForm : Form
             _trayOpenMenuItem.Text = AppLocalization.T("打开 GitKeyRouter", "Open GitKeyRouter");
         }
 
+        if (_trayCheckUpdatesMenuItem is not null)
+        {
+            _trayCheckUpdatesMenuItem.Text = AppLocalization.T("检查更新…", "Check for updates...");
+        }
+
         if (_trayExitMenuItem is not null)
         {
             _trayExitMenuItem.Text = AppLocalization.T("退出", "Exit");
@@ -524,11 +530,21 @@ public sealed class MainForm : Form
     {
         _trayOpenMenuItem = new ToolStripMenuItem(AppLocalization.T("打开 GitKeyRouter", "Open GitKeyRouter"));
         _trayOpenMenuItem.Click += (_, _) => ShowMainWindow();
+        _trayCheckUpdatesMenuItem = new ToolStripMenuItem(AppLocalization.T("检查更新…", "Check for updates..."))
+        {
+            Name = "TrayCheckUpdatesMenuItem"
+        };
+        _trayCheckUpdatesMenuItem.Click += async (_, _) =>
+        {
+            ShowMainWindow();
+            await CheckForUpdatesAsync(showCurrentMessage: true);
+        };
         _trayExitMenuItem = new ToolStripMenuItem(AppLocalization.T("退出", "Exit"));
         _trayExitMenuItem.Click += (_, _) => RequestExit();
 
         _trayMenu = new ContextMenuStrip();
         _trayMenu.Items.Add(_trayOpenMenuItem);
+        _trayMenu.Items.Add(_trayCheckUpdatesMenuItem);
         _trayMenu.Items.Add(new ToolStripSeparator());
         _trayMenu.Items.Add(_trayExitMenuItem);
 
@@ -736,6 +752,16 @@ public sealed class MainForm : Form
     {
         if (_checkingForUpdates)
         {
+            if (showCurrentMessage)
+            {
+                MessageBox.Show(
+                    this,
+                    AppLocalization.T("更新检查正在进行，请稍候。", "An update check is already in progress."),
+                    AppLocalization.T("检查更新", "Check for updates"),
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+
             return;
         }
 
@@ -743,6 +769,10 @@ public sealed class MainForm : Form
         if (_checkForUpdatesButton is not null)
         {
             _checkForUpdatesButton.Enabled = false;
+        }
+        if (_trayCheckUpdatesMenuItem is not null)
+        {
+            _trayCheckUpdatesMenuItem.Enabled = false;
         }
 
         try
@@ -793,32 +823,34 @@ public sealed class MainForm : Form
             {
                 _checkForUpdatesButton.Enabled = true;
             }
+            if (_trayCheckUpdatesMenuItem is not null && !IsDisposed && !Disposing)
+            {
+                _trayCheckUpdatesMenuItem.Enabled = true;
+            }
         }
     }
 
     private async Task HandleAvailableUpdateAsync(UpdateReleaseInfo release)
     {
         var packageKind = UpdatePackageDetector.Detect();
-        var installedPackage = packageKind is UpdatePackageKind.InstallerFrameworkDependent or UpdatePackageKind.InstallerSelfContained;
-        var notes = BoundUpdateNotes(release.Notes);
-        var packageLabel = UpdatePackageDetector.DisplayName(packageKind);
-
-        if (installedPackage
+        var currentVersion = typeof(MainForm).Assembly.GetName().Version ?? new Version(0, 0, 0, 0);
+        var canInstall = packageKind is UpdatePackageKind.InstallerFrameworkDependent or UpdatePackageKind.InstallerSelfContained
             && release.HasVerifiedInstallerDownload(packageKind)
-            && _services.UpdateInstallerLauncher.CanInstall(packageKind))
+            && _services.UpdateInstallerLauncher.CanInstall(packageKind);
+
+        ShowMainWindow();
+        using var dialog = new UpdateDialog(currentVersion, release, packageKind, canInstall);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
         {
-            var confirm = MessageBox.Show(
-                this,
-                AppLocalization.T(
-                    $"发现新版本 {release.TagName}。\r\n当前版本：{DisplayVersion}\r\n安装类型：{packageLabel}\r\n\r\n{notes}\r\n\r\n下载并安装经过 SHA-256 校验的 MSI 更新吗？",
-                    $"GitKeyRouter {release.TagName} is available.\r\nCurrent version: {DisplayVersion}\r\nPackage: {packageLabel}\r\n\r\n{notes}\r\n\r\nDownload and install the SHA-256 verified MSI update now?"),
-                AppLocalization.T("发现更新", "Update available"),
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Information);
-            if (confirm != DialogResult.Yes)
+            SetStatus(AppLocalization.T($"发现更新 {release.TagName}", $"Update {release.TagName} is available"));
+            return;
+        }
+
+        if (dialog.InstallRequested)
+        {
+            if (!canInstall)
             {
-                SetStatus(AppLocalization.T($"发现更新 {release.TagName}", $"Update {release.TagName} is available"));
-                return;
+                throw new InvalidOperationException("The selected update cannot be installed safely in-app.");
             }
 
             SetStatus(AppLocalization.T("正在下载并校验安装包…", "Downloading and verifying the installer…"));
@@ -833,20 +865,9 @@ public sealed class MainForm : Form
             return;
         }
 
-        var target = installedPackage
-            ? release.ReleasePage
-            : release.PreferredDownload(packageKind) ?? release.ReleasePage;
-        var prompt = MessageBox.Show(
-            this,
-            AppLocalization.T(
-                $"发现新版本 {release.TagName}。\r\n当前版本：{DisplayVersion}\r\n安装类型：{packageLabel}\r\n\r\n{notes}\r\n\r\n当前安装类型不执行应用内覆盖更新。是否打开经过验证的 GitHub 下载/发布页面？",
-                $"GitKeyRouter {release.TagName} is available.\r\nCurrent version: {DisplayVersion}\r\nPackage: {packageLabel}\r\n\r\n{notes}\r\n\r\nThis package type is not overwritten in-app. Open the verified GitHub download/release page?"),
-            AppLocalization.T("发现更新", "Update available"),
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Information);
-        if (prompt == DialogResult.Yes)
+        if (dialog.SelectedUri is not null)
         {
-            OpenExternalUri(target);
+            OpenExternalUri(dialog.SelectedUri);
         }
 
         SetStatus(AppLocalization.T($"发现更新 {release.TagName}", $"Update {release.TagName} is available"));
