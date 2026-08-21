@@ -19,6 +19,8 @@ if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
 }
 
 $runRoot = Join-Path $root "artifacts\installer-lifecycle\$([Guid]::NewGuid().ToString('N'))"
+$startMenuShortcutPath = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\GitKeyRouter\GitKeyRouter.lnk'
+$desktopShortcutPath = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'GitKeyRouter.lnk'
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 
 function Invoke-Msi {
@@ -32,7 +34,7 @@ function Invoke-Msi {
     $arguments = @($verb, "`"$Path`"", '/qn', '/norestart', '/l*v', "`"$LogPath`"")
     if ($Action -eq 'Install') {
         $arguments += "APPLICATIONFOLDER=`"$InstallDirectory`""
-        $arguments += 'INSTALLDESKTOPSHORTCUT=0'
+        $arguments += 'INSTALLDESKTOPSHORTCUT=1'
     }
 
     $process = Start-Process `
@@ -47,6 +49,8 @@ function Invoke-Msi {
 }
 
 function Test-InstalledApplication {
+    param([switch]$RequireStableShortcuts)
+
     $executable = Join-Path $InstallDirectory 'GitKeyRouter.exe'
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         throw "Installed executable is missing: $executable"
@@ -71,6 +75,37 @@ function Test-InstalledApplication {
     if ([string]::IsNullOrWhiteSpace(((Get-Content $stdout) -join ''))) {
         throw 'Installed version command returned no version.'
     }
+
+    if ($RequireStableShortcuts) {
+        Test-InstalledShortcut -Path $startMenuShortcutPath -ExpectedTarget $executable -Description 'Start menu'
+        Test-InstalledShortcut -Path $desktopShortcutPath -ExpectedTarget $executable -Description 'Desktop'
+    }
+}
+
+function Test-InstalledShortcut {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedTarget,
+        [Parameter(Mandatory)][string]$Description
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "$Description shortcut is missing: $Path"
+    }
+
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($Path)
+    $expectedFullPath = [System.IO.Path]::GetFullPath($ExpectedTarget)
+    $actualFullPath = [System.IO.Path]::GetFullPath([string]$shortcut.TargetPath)
+    if ($actualFullPath -cne $expectedFullPath) {
+        throw "$Description shortcut target '$actualFullPath' does not match '$expectedFullPath'."
+    }
+
+    $iconLocation = [string]$shortcut.IconLocation
+    if (-not [string]::IsNullOrWhiteSpace($iconLocation) -and
+        $iconLocation -match '(?i)\\Windows\\Installer\\') {
+        throw "$Description shortcut still depends on the Windows Installer icon cache: $iconLocation"
+    }
 }
 
 $installedMsi = ''
@@ -83,7 +118,7 @@ try {
 
     Invoke-Msi -Action Install -Path $CurrentMsi -LogPath (Join-Path $runRoot 'install-current.log')
     $installedMsi = $CurrentMsi
-    Test-InstalledApplication
+    Test-InstalledApplication -RequireStableShortcuts
 
     $registry = Get-ItemProperty -LiteralPath 'HKLM:\Software\project-base-mirror\GitKeyRouter' -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace([string]$registry.InstallerFlavor)) {
@@ -98,6 +133,12 @@ try {
     $installedMsi = ''
     if (Test-Path -LiteralPath (Join-Path $InstallDirectory 'GitKeyRouter.exe')) {
         throw 'GitKeyRouter.exe remains after uninstall.'
+    }
+    if (Test-Path -LiteralPath $startMenuShortcutPath) {
+        throw "Start menu shortcut remains after uninstall: $startMenuShortcutPath"
+    }
+    if (Test-Path -LiteralPath $desktopShortcutPath) {
+        throw "Desktop shortcut remains after uninstall: $desktopShortcutPath"
     }
     $remainingMarker = Get-ItemPropertyValue `
         -LiteralPath 'HKLM:\Software\project-base-mirror\GitKeyRouter' `

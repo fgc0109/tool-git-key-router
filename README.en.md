@@ -27,7 +27,7 @@ The project uses C#, .NET 10, and WinForms without a database, WebView, Node.js,
 
 GitHub Releases provides Windows x64 packages:
 
-- **`GitKeyRouter-v<version>-win-x64-setup.msi` (recommended)**: a self-contained installer including the .NET 10 runtime. It defaults to `C:\Program Files\GitKeyRouter\`, creates a Start menu entry, and offers an optional desktop shortcut.
+- **`GitKeyRouter-v<version>-win-x64-setup.msi` (recommended)**: a self-contained installer including the .NET 10 runtime. It defaults to `C:\Program Files\GitKeyRouter\`, creates a Start menu entry, and offers an optional desktop shortcut. Shortcuts use the executable's embedded icon directly instead of a ProductCode-specific MSI icon cache entry.
 - **`GitKeyRouter-v<version>-win-x64-framework-dependent-setup.msi`**: a smaller installer that requires the .NET 10 Desktop Runtime x64.
 - **`GitKeyRouter-v<version>-win-x64-portable.zip`**: a self-contained portable build that includes the .NET runtime and can run after extraction.
 - **`GitKeyRouter-v<version>-win-x64-framework-dependent.zip`**: a smaller framework-dependent build that requires the .NET 10 Desktop Runtime x64 on the target machine.
@@ -577,7 +577,7 @@ artifacts\installer\                                # Both structurally validate
 artifacts\release\                                  # Both MSI, both ZIP, and SHA256SUMS.txt
 ```
 
-Installer validation reads the MSI database and checks the version, upgrade identity, install directory, shortcuts, uninstall metadata, payload files, and runtime boundary. After publishing, the manual `Installer lifecycle` GitHub Actions workflow can exercise silent install, optional cross-version upgrade, installed-version smoke, and uninstall cleanup for both variants while retaining logs as workflow artifacts.
+Installer validation reads the MSI database and checks the version, upgrade identity, install directory, direct non-advertised executable targets, empty shortcut icon overrides, uninstall metadata, payload files, and runtime boundary. After publishing, the manual `Installer lifecycle` GitHub Actions workflow can exercise silent install, optional cross-version upgrade, real `.lnk` targets and icon-cache boundaries, installed-version smoke, and uninstall cleanup for both variants while retaining logs as workflow artifacts.
 
 These directories contain local generated artifacts and are ignored by `.gitignore`. They are not copied by commits or branch merges. When publishing from an isolated workspace, artifacts exist only in that workspace; run the BAT file again from the current repository root to create them under the current repository's `artifacts` directory.
 

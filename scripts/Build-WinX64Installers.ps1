@@ -87,6 +87,11 @@ if (Test-Path -LiteralPath $PayloadRoot) {
 if (Test-Path -LiteralPath $OutputDirectory) {
     Remove-Item -LiteralPath $OutputDirectory -Recurse -Force
 }
+foreach ($intermediateDirectory in @($selfContainedIntermediate, $frameworkIntermediate)) {
+    if (Test-Path -LiteralPath $intermediateDirectory) {
+        Remove-Item -LiteralPath $intermediateDirectory -Recurse -Force
+    }
+}
 New-Item -ItemType Directory -Path $PayloadRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 

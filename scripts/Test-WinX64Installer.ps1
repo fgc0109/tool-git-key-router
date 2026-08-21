@@ -80,8 +80,18 @@ Assert-Equal (Get-MsiQueryValue "SELECT ``Value`` FROM ``Property`` WHERE ``Prop
 Assert-Equal (Get-MsiQueryValue "SELECT ``Condition`` FROM ``Component`` WHERE ``Component``='DesktopShortcutComponent'") 'INSTALLDESKTOPSHORTCUT = 1' 'MSI desktop-shortcut condition'
 Assert-Equal (Get-MsiQueryValue "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ARPPRODUCTICON'") 'GitKeyRouterIcon.exe' 'MSI Programs and Features icon'
 Assert-Equal (Get-MsiQueryValue "SELECT ``Name`` FROM ``Icon`` WHERE ``Name``='GitKeyRouterIcon.exe'") 'GitKeyRouterIcon.exe' 'MSI icon resource'
-Assert-Equal (Get-MsiQueryValue "SELECT ``Icon_`` FROM ``Shortcut`` WHERE ``Shortcut``='StartMenuShortcut'") 'GitKeyRouterIcon.exe' 'MSI Start menu icon'
-Assert-Equal (Get-MsiQueryValue "SELECT ``Icon_`` FROM ``Shortcut`` WHERE ``Shortcut``='DesktopShortcut'") 'GitKeyRouterIcon.exe' 'MSI desktop icon'
+$startMenuShortcutComponent = Get-MsiQueryValue "SELECT ``Component_`` FROM ``Shortcut`` WHERE ``Shortcut``='StartMenuShortcut'"
+$startMenuShortcutKeyPath = Get-MsiQueryValue "SELECT ``KeyPath`` FROM ``Component`` WHERE ``Component``='StartMenuShortcutComponent'"
+$startMenuShortcutRegistry = Get-MsiQueryValue "SELECT ``Registry`` FROM ``Registry`` WHERE ``Component_``='StartMenuShortcutComponent' AND ``Name``='StartMenuShortcut'"
+Assert-Equal $startMenuShortcutComponent 'StartMenuShortcutComponent' 'MSI Start menu shortcut component'
+Assert-Equal $startMenuShortcutKeyPath $startMenuShortcutRegistry 'MSI Start menu shortcut key path'
+Assert-Equal (Get-MsiQueryValue "SELECT ``Root`` FROM ``Registry`` WHERE ``Registry``='$startMenuShortcutRegistry'") '1' 'MSI Start menu shortcut registry root'
+Assert-Equal (Get-MsiQueryValue "SELECT ``Target`` FROM ``Shortcut`` WHERE ``Shortcut``='StartMenuShortcut'") '[APPLICATIONFOLDER]GitKeyRouter.exe' 'MSI Start menu shortcut target'
+Assert-Equal (Get-MsiQueryValue "SELECT ``Target`` FROM ``Shortcut`` WHERE ``Shortcut``='DesktopShortcut'") '[APPLICATIONFOLDER]GitKeyRouter.exe' 'MSI desktop shortcut target'
+Assert-Equal (Get-MsiQueryValue "SELECT ``Icon_`` FROM ``Shortcut`` WHERE ``Shortcut``='StartMenuShortcut'") '' 'MSI Start menu shortcut icon override'
+Assert-Equal (Get-MsiQueryValue "SELECT ``Icon_`` FROM ``Shortcut`` WHERE ``Shortcut``='DesktopShortcut'") '' 'MSI desktop shortcut icon override'
+Assert-Equal (Get-MsiQueryValue "SELECT ``Arguments`` FROM ``Shortcut`` WHERE ``Shortcut``='StartMenuShortcut'") '' 'MSI Start menu shortcut arguments'
+Assert-Equal (Get-MsiQueryValue "SELECT ``Arguments`` FROM ``Shortcut`` WHERE ``Shortcut``='DesktopShortcut'") '' 'MSI desktop shortcut arguments'
 Assert-Equal (Get-MsiQueryValue "SELECT ``Value`` FROM ``Registry`` WHERE ``Name``='InstallerFlavor'") '[INSTALLERFLAVOR]' 'MSI flavor registry marker'
 Assert-Equal (Get-MsiQueryValue "SELECT ``Value`` FROM ``Registry`` WHERE ``Name``='InstallLocation'") '[APPLICATIONFOLDER]' 'MSI install-location registry marker'
 

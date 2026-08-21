@@ -84,16 +84,7 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="APPLICATIONFOLDER" Name="GitKeyRouter">
         <Component Id="ApplicationFiles" Guid="*">
-          <File Id="GitKeyRouterExe" Source="$(PayloadDir)\GitKeyRouter.exe" KeyPath="yes">
-            <Shortcut
-                Id="StartMenuShortcut"
-                Directory="ApplicationProgramsFolder"
-                Name="GitKeyRouter"
-                Description="Git 与 SSH 多身份路由工具"
-                WorkingDirectory="APPLICATIONFOLDER"
-                Icon="GitKeyRouterIcon.exe"
-                Advertise="yes" />
-          </File>
+          <File Id="GitKeyRouterExe" Source="$(PayloadDir)\GitKeyRouter.exe" KeyPath="yes" />
           <RegistryValue
               Root="HKLM"
               Key="Software\project-base-mirror\GitKeyRouter"
@@ -106,13 +97,33 @@
               Name="InstallLocation"
               Type="string"
               Value="[APPLICATIONFOLDER]" />
-          <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
         </Component>
       </Directory>
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="ApplicationProgramsFolder" Name="GitKeyRouter" />
+      <Directory Id="ApplicationProgramsFolder" Name="GitKeyRouter">
+        <Component Id="StartMenuShortcutComponent" Guid="*">
+          <Shortcut
+              Id="StartMenuShortcut"
+              Name="GitKeyRouter"
+              Description="Git 与 SSH 多身份路由工具"
+              Target="[APPLICATIONFOLDER]GitKeyRouter.exe"
+              WorkingDirectory="APPLICATIONFOLDER" />
+          <RegistryValue
+              Id="StartMenuShortcutRegistry"
+              Root="HKCU"
+              Key="Software\project-base-mirror\GitKeyRouter"
+              Name="StartMenuShortcut"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+          <RemoveFolder
+              Id="RemoveApplicationProgramsFolder"
+              Directory="ApplicationProgramsFolder"
+              On="uninstall" />
+        </Component>
+      </Directory>
     </StandardDirectory>
 
     <StandardDirectory Id="DesktopFolder">
@@ -122,8 +133,7 @@
             Name="GitKeyRouter"
             Description="Git 与 SSH 多身份路由工具"
             Target="[APPLICATIONFOLDER]GitKeyRouter.exe"
-            WorkingDirectory="APPLICATIONFOLDER"
-            Icon="GitKeyRouterIcon.exe" />
+            WorkingDirectory="APPLICATIONFOLDER" />
         <RegistryValue
             Root="HKCU"
             Key="Software\project-base-mirror\GitKeyRouter"
@@ -136,6 +146,7 @@
 
     <Feature Id="MainFeature" Title="GitKeyRouter 主程序" Level="1" AllowAbsent="no">
       <ComponentRef Id="ApplicationFiles" />
+      <ComponentRef Id="StartMenuShortcutComponent" />
       <Files Include="$(PayloadDir)\**" Directory="APPLICATIONFOLDER">
         <Exclude Files="$(PayloadDir)\GitKeyRouter.exe" />
       </Files>

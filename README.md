@@ -27,7 +27,7 @@ GitKeyRouter 是一个面向 Windows 10 / Windows 11 的本地桌面工具，用
 
 GitHub Releases 提供 Windows x64 发布包：
 
-- **`GitKeyRouter-v<version>-win-x64-setup.msi`（推荐）**：自包含安装包，内含 .NET 10 运行时；默认安装到 `C:\Program Files\GitKeyRouter\`，提供开始菜单入口和可选桌面快捷方式。
+- **`GitKeyRouter-v<version>-win-x64-setup.msi`（推荐）**：自包含安装包，内含 .NET 10 运行时；默认安装到 `C:\Program Files\GitKeyRouter\`，提供开始菜单入口和可选桌面快捷方式。快捷方式直接使用程序 EXE 的内嵌图标，不依赖具体 MSI ProductCode 的图标缓存。
 - **`GitKeyRouter-v<version>-win-x64-framework-dependent-setup.msi`**：轻量安装包，需要目标机器安装 .NET 10 Desktop Runtime x64。
 - **`GitKeyRouter-v<version>-win-x64-portable.zip`**：自包含便携版，内含 .NET 运行时，解压后可直接运行。
 - **`GitKeyRouter-v<version>-win-x64-framework-dependent.zip`**：体积较小，需要目标机器安装 .NET 10 Desktop Runtime x64。
@@ -574,7 +574,7 @@ artifacts\installer\                                # 构建并完成结构校�
 artifacts\release\                                  # 两个 MSI、两个 ZIP 和 SHA256SUMS.txt
 ```
 
-安装器结构检查会读取 MSI 数据库，核对版本、升级码、安装目录、快捷方式、卸载注册信息、负载文件和运行时边界。发布后可手动运行 GitHub Actions 的 `Installer lifecycle` 工作流，对两种 MSI 执行静默安装、可选跨版本升级、已安装程序版本冒烟与卸载清理；日志作为工作流产物保留。
+安装器结构检查会读取 MSI 数据库，核对版本、升级码、安装目录、非广告快捷方式的 EXE 目标、空 Icon 覆盖、卸载注册信息、负载文件和运行时边界。发布后可手动运行 GitHub Actions 的 `Installer lifecycle` 工作流，对两种 MSI 执行静默安装、可选跨版本升级、真实 `.lnk` 目标与图标缓存边界、已安装程序版本冒烟和卸载清理；日志作为工作流产物保留。
 
 这些目录属于本地生成物并被 `.gitignore` 忽略，不会随 Git 提交或分支合并复制。若在隔离工作区中执行发布，生成物也只存在于该工作区；需要在当前仓库根目录重新运行 BAT 才会出现在当前仓库的 `artifacts` 下。
 

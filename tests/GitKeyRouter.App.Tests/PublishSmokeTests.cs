@@ -101,6 +101,10 @@ public sealed class PublishSmokeTests
         Assert.Contains("8E52C902-B4A2-4635-A1AF-549B3A0CDC21", installerSource, StringComparison.Ordinal);
         Assert.Contains("GitKeyRouterInstallDirDlg", installerSource, StringComparison.Ordinal);
         Assert.Contains("DesktopShortcutFeature", installerSource, StringComparison.Ordinal);
+        Assert.Contains("StartMenuShortcutComponent", installerSource, StringComparison.Ordinal);
+        Assert.Contains("Target=\"[APPLICATIONFOLDER]GitKeyRouter.exe\"", installerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Advertise=\"yes\"", installerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Icon=\"GitKeyRouterIcon.exe\"", installerSource, StringComparison.Ordinal);
         Assert.Contains("INSTALLERFLAVOR", installerSource, StringComparison.Ordinal);
         Assert.DoesNotContain("LicenseAgreementDlg", installerSource, StringComparison.Ordinal);
         Assert.Contains("-p:PublishSingleFile=false", buildScript, StringComparison.Ordinal);
@@ -108,10 +112,14 @@ public sealed class PublishSmokeTests
         Assert.Contains("-p:PublishSingleFile=true", buildScript, StringComparison.Ordinal);
         Assert.Contains("GitKeyRouter.Updater\\GitKeyRouter.Updater.csproj", buildScript, StringComparison.Ordinal);
         Assert.Contains("GitKeyRouter.Updater.exe", buildScript, StringComparison.Ordinal);
+        Assert.Contains("$selfContainedIntermediate, $frameworkIntermediate", buildScript, StringComparison.Ordinal);
         Assert.Contains("GitKeyRouter.Updater.exe", validationScript, StringComparison.Ordinal);
         Assert.Contains("Test-WinX64Installer.ps1", buildScript, StringComparison.Ordinal);
         Assert.Contains("WindowsInstaller.Installer", validationScript, StringComparison.Ordinal);
         Assert.Contains("msiexec.exe", lifecycleScript, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("WScript.Shell", lifecycleScript, StringComparison.Ordinal);
+        Assert.Contains("RequireStableShortcuts", lifecycleScript, StringComparison.Ordinal);
+        Assert.Contains("Windows Installer icon cache", lifecycleScript, StringComparison.Ordinal);
         Assert.Contains("Build-WinX64Installers.ps1", releaseWorkflow, StringComparison.Ordinal);
         Assert.Contains("matrix:", lifecycleWorkflow, StringComparison.Ordinal);
         Assert.Contains("framework-dependent", lifecycleWorkflow, StringComparison.Ordinal);
