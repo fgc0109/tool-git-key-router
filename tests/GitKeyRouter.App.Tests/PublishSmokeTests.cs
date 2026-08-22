@@ -245,7 +245,7 @@ public sealed class PublishSmokeTests
         using var globalJson = await JsonDocument.ParseAsync(globalJsonStream);
         var sdk = globalJson.RootElement.GetProperty("sdk");
         Assert.Equal("10.0.302", sdk.GetProperty("version").GetString());
-        Assert.Equal("latestPatch", sdk.GetProperty("rollForward").GetString());
+        Assert.Equal("disable", sdk.GetProperty("rollForward").GetString());
 
         var lockFiles = new[]
         {
